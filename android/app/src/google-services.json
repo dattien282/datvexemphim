@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "112033693184",
+    "project_id": "datvexemphimgroup5",
+    "storage_bucket": "datvexemphimgroup5.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:112033693184:android:7459f37fc856c7a600a2e5",
+        "android_client_info": {
+          "package_name": "com.example.dat_ve_xem_phim_group5"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDcgvqlf94qhJD0-W-dNrtN1BVkw2gFaLY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

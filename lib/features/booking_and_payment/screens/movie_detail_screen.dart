@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:youtube_player_flutter/youtube_player_flutter.dart';
 import 'showtime_selection_screen.dart';
 import '../../auth/screens/login_screen.dart';
 
@@ -25,201 +26,42 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     super.dispose();
   }
 
-  void _showSimulatedTrailer(BuildContext context) {
-    bool isPlaying = true;
-    double progress = 0.08; 
-    double volume = 0.8;
-    bool isMuted = false;
-    int currentSecs = 12;
-    const int totalSecs = 150; 
+  // Map tên phim → YouTube video ID
+  static const Map<String, String> _trailerIds = {
+    'Mai': 'EX6clvId19s',
+    'Dune: Hành Tinh Cát - Phần 2': 'kCO-RO3q7U4',
+    'Deadpool & Wolverine': 'inIVdZSFfc0',
+    'Kẻ Trộm Mặt Trăng 4': 'S1dnnQsY0QU',
+    'Inside Out 2': 'AfOlW2OrzqE',
+    'Kung Fu Panda 4': 'py1BMJedzEs',
+    'Godzilla x Kong: Đế Chế Mới': '5XkgG_AAQs0',
+    'Avatar 3': 'rZXmSgjxpdQ',
+  };
 
+  String? _getVideoId() {
+    final title = widget.movieData['title'] ?? '';
+    // Ưu tiên map cứng
+    if (_trailerIds.containsKey(title)) return _trailerIds[title];
+    // Fallback: trích từ trailerUrl trong Firestore
+    final url = widget.movieData['trailerUrl'] ?? '';
+    return YoutubePlayer.convertUrlToId(url);
+  }
+
+  void _showTrailer(BuildContext context) {
+    final videoId = _getVideoId();
+    if (videoId == null || videoId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Chưa có trailer cho phim này.')),
+      );
+      return;
+    }
     showDialog(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (dialogContext, setDialogState) {
-            final minutes = (currentSecs ~/ 60).toString().padLeft(2, '0');
-            final seconds = (currentSecs % 60).toString().padLeft(2, '0');
-            
-            final totalMinutes = (totalSecs ~/ 60).toString().padLeft(2, '0');
-            final totalSeconds = (totalSecs % 60).toString().padLeft(2, '0');
-
-            return Dialog(
-              backgroundColor: Colors.black,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AppBar(
-                    backgroundColor: Colors.transparent,
-                    elevation: 0,
-                    title: Text(
-                      'TRAILER: ${widget.movieData['title']}',
-                      style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold),
-                    ),
-                    automaticallyImplyLeading: false,
-                    actions: [
-                      IconButton(
-                        icon: const Icon(Icons.close, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      )
-                    ],
-                  ),
-                  
-                  AspectRatio(
-                    aspectRatio: 16 / 9,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Container(
-                          decoration: BoxDecoration(
-                            image: DecorationImage(
-                              image: NetworkImage(widget.movieData['posterUrl'] ?? ''),
-                              fit: BoxFit.cover,
-                            ),
-                          ),
-                        ),
-                        Container(color: Colors.black.withValues(alpha: isMuted ? 0.9 : 0.6)),
-                        
-                        GestureDetector(
-                          onTap: () {
-                            setDialogState(() {
-                              isPlaying = !isPlaying;
-                            });
-                          },
-                          child: Icon(
-                            isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded,
-                            color: Colors.amber,
-                            size: 60,
-                          ),
-                        ),
-
-                        Positioned(
-                          bottom: 12,
-                          left: 12,
-                          right: 12,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text('$minutes:$seconds', style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                                  Text('$totalMinutes:$totalSeconds', style: const TextStyle(color: Colors.white70, fontSize: 10)),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              SliderTheme(
-                                data: SliderTheme.of(context).copyWith(
-                                  trackHeight: 3,
-                                  thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                  activeTrackColor: Colors.amber,
-                                  inactiveTrackColor: Colors.white24,
-                                  thumbColor: Colors.amber,
-                                ),
-                                child: Slider(
-                                  value: progress,
-                                  onChanged: (val) {
-                                    setDialogState(() {
-                                      progress = val;
-                                      currentSecs = (val * totalSecs).toInt();
-                                    });
-                                  },
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            IconButton(
-                              icon: Icon(
-                                isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                                color: Colors.white70,
-                                size: 20,
-                              ),
-                              onPressed: () {
-                                setDialogState(() {
-                                  isMuted = !isMuted;
-                                });
-                              },
-                            ),
-                            if (!isMuted)
-                              SizedBox(
-                                width: 60,
-                                child: Slider(
-                                  value: volume,
-                                  activeColor: Colors.amber,
-                                  inactiveColor: Colors.white24,
-                                  onChanged: (val) {
-                                    setDialogState(() {
-                                      volume = val;
-                                      if (val == 0) {
-                                        isMuted = true;
-                                      } else {
-                                        isMuted = false;
-                                      }
-                                    });
-                                  },
-                                ),
-                              )
-                          ],
-                        ),
-
-                        Row(
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.replay_10_rounded, color: Colors.white70, size: 22),
-                              onPressed: () {
-                                setDialogState(() {
-                                  currentSecs = (currentSecs - 10 < 0) ? 0 : currentSecs - 10;
-                                  progress = currentSecs / totalSecs;
-                                });
-                              },
-                            ),
-                            IconButton(
-                              icon: Icon(
-                                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                color: Colors.amber,
-                                size: 30,
-                              ),
-                              onPressed: () {
-                                setDialogState(() {
-                                  isPlaying = !isPlaying;
-                                });
-                              },
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.forward_10_rounded, color: Colors.white70, size: 22),
-                              onPressed: () {
-                                setDialogState(() {
-                                  currentSecs = (currentSecs + 10 > totalSecs) ? totalSecs : currentSecs + 10;
-                                  progress = currentSecs / totalSecs;
-                                });
-                              },
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(width: 40), 
-                      ],
-                    ),
-                  )
-                ],
-              ),
-            );
-          },
-        );
-      },
+      barrierColor: Colors.black87,
+      builder: (_) => _TrailerDialog(
+        videoId: videoId,
+        title: widget.movieData['title'] ?? '',
+      ),
     );
   }
 
@@ -360,7 +202,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             iconTheme: const IconThemeData(color: Colors.white),
             flexibleSpace: FlexibleSpaceBar(
               background: GestureDetector(
-                onTap: () => _showSimulatedTrailer(context),
+                onTap: () => _showTrailer(context),
                 behavior: HitTestBehavior.opaque,
                 child: Stack(
                   alignment: Alignment.center,
@@ -735,6 +577,95 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── Dialog trailer YouTube (nhẹ, không navigate screen mới) ───────────────
+class _TrailerDialog extends StatefulWidget {
+  final String videoId;
+  final String title;
+  const _TrailerDialog({required this.videoId, required this.title});
+
+  @override
+  State<_TrailerDialog> createState() => _TrailerDialogState();
+}
+
+class _TrailerDialogState extends State<_TrailerDialog> {
+  late YoutubePlayerController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = YoutubePlayerController(
+      initialVideoId: widget.videoId,
+      flags: const YoutubePlayerFlags(
+        autoPlay: true,
+        mute: false,
+        enableCaption: false,
+        forceHD: false,
+        hideThumbnail: true,
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.black,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 80),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+            child: Row(
+              children: [
+                const Icon(Icons.play_circle_rounded, color: Colors.amber, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.title.toUpperCase(),
+                    style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
+                  onPressed: () {
+                    _controller.pause();
+                    Navigator.pop(context);
+                  },
+                ),
+              ],
+            ),
+          ),
+          // Player
+          ClipRRect(
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+            child: YoutubePlayer(
+              controller: _controller,
+              showVideoProgressIndicator: true,
+              progressIndicatorColor: Colors.amber,
+              progressColors: const ProgressBarColors(
+                playedColor: Colors.amber,
+                handleColor: Colors.amberAccent,
+                bufferedColor: Colors.white24,
+                backgroundColor: Colors.white12,
+              ),
+              onReady: () => _controller.play(),
+            ),
+          ),
+        ],
       ),
     );
   }

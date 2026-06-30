@@ -138,26 +138,46 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  void _applyVoucherCode() {
+  void _applyVoucherCode() async {
     final code = _voucherController.text.trim().toUpperCase();
-    setState(() {
-      _voucherError = null;
-      if (code.isEmpty) {
-        _voucherError = 'Vui lòng nhập mã giảm giá!';
+    if (code.isEmpty) {
+      setState(() => _voucherError = 'Vui lòng nhập mã giảm giá!');
+      return;
+    }
+
+    setState(() { _voucherError = null; });
+
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('promotions')
+          .where('code', isEqualTo: code)
+          .where('isActive', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (snap.docs.isEmpty) {
+        setState(() {
+          _voucherError = 'Mã giảm giá không hợp lệ hoặc đã hết hạn!';
+          _discountAmount = 0;
+          _appliedVoucher = null;
+        });
         return;
       }
-      if (code == 'STELLA50') {
-        _discountAmount = 50000;
+
+      final promo = snap.docs.first.data();
+      final int discount = (promo['discount'] as num? ?? 0).toInt();
+      setState(() {
+        _discountAmount = discount;
         _appliedVoucher = code;
-      } else if (code == 'STELLA100') {
-        _discountAmount = 100000;
-        _appliedVoucher = code;
-      } else {
-        _voucherError = 'Mã giảm giá không hợp lệ!';
-        _discountAmount = 0;
-        _appliedVoucher = null;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Áp dụng thành công: ${promo['title']} - giảm ${discount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')} đ'), backgroundColor: Colors.green),
+        );
       }
-    });
+    } catch (e) {
+      setState(() => _voucherError = 'Lỗi kiểm tra mã: $e');
+    }
   }
 
   @override
@@ -426,14 +446,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
         'email': userEmail,
       });
 
-      // 3. Đẩy thông báo đặt vé thành công
-      await FirebaseFirestore.instance.collection('user_notifications').add({
+      // 3. Đẩy thông báo đặt vé thành công vào collection 'notifications'
+      await FirebaseFirestore.instance.collection('notifications').add({
         'title': 'ĐẶT VÉ THÀNH CÔNG 🎉',
-        'content': 'Chúc mừng bạn đã đặt thành công ghế: ${widget.selectedSeats.join(", ")} cho bộ phim "$movieTitle".',
-        'time': DateFormat('HH:mm - dd/MM/yyyy').format(DateTime.now()),
+        'body': 'Chúc mừng bạn đã đặt thành công ghế: ${widget.selectedSeats.join(", ")} cho bộ phim "$movieTitle".',
+        'userEmail': userEmail,
         'type': 'ticket',
         'isRead': false,
-        'created_at': Timestamp.now(),
+        'createdAt': Timestamp.now(),
       });
 
       // 4. Giải phóng ghế đang giữ tạm thời

@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../home/screens/home_screen.dart';
+import '../../admin/screens/admin_dashboard_screen.dart';
+import '../../staff/screens/staff_dashboard_screen.dart';
+import '../../theater_manager/screens/theater_manager_dashboard_screen.dart';
+import '../../../providers/user_provider.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -37,28 +42,56 @@ class _LoginScreenState extends State<LoginScreen> {
         builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.amber)),
       );
 
+      UserCredential cred;
       if (isLogin) {
-        // ĐĂNG NHẬP THẬT QUA FIREBASE
-        await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
+        cred = await FirebaseAuth.instance.signInWithEmailAndPassword(email: email, password: password);
       } else {
-        // ĐĂNG KÝ THẬT QUA FIREBASE
-        await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: password);
-        _showSnackBar('Đăng ký tài khoản thành công! 🎉', Colors.green);
+        cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(email: email, password: password);
+        // Tạo document user mặc định role = 'user'
+        await FirebaseFirestore.instance.collection('users').doc(cred.user!.uid).set({
+          'email': email,
+          'role': 'user',
+          'isAdmin': false,
+          'wallet_balance': 500000,
+          'created_at': Timestamp.now(),
+        }, SetOptions(merge: true));
       }
 
       if (!mounted) return;
       Navigator.pop(context); // Tắt vòng xoay loading
 
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (context) => const HomeScreen()),
-      );
+      // Đọc role từ Firestore để route đúng màn hình
+      await _navigateByRole(cred.user!.uid);
 
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context);
       _showSnackBar('Lỗi: ${e.toString().split(']').last.trim()}', Colors.redAccent);
     }
+  }
+
+  Future<void> _navigateByRole(String uid) async {
+    final doc = await FirebaseFirestore.instance.collection('users').doc(uid).get();
+    final data = doc.data() ?? {};
+    final profile = UserProfile.fromMap(uid, data);
+
+    if (!mounted) return;
+
+    Widget destination;
+    if (profile.hasAdminAccess) {
+      destination = const AdminDashboardScreen();
+    } else if (profile.hasManagerAccess) {
+      destination = TheaterManagerDashboardScreen(managerProfile: profile);
+    } else if (profile.hasStaffAccess) {
+      destination = StaffDashboardScreen(staffProfile: profile);
+    } else {
+      destination = const HomeScreen();
+    }
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => destination),
+    );
   }
 
   void _showSnackBar(String message, Color iconColor) {

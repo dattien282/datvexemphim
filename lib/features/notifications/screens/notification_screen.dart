@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class NotificationScreen extends StatefulWidget {
@@ -24,12 +25,17 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
     super.dispose();
   }
 
+  String get _userEmail => FirebaseAuth.instance.currentUser?.email ?? '';
+
   void _markAsRead(String docId) {
-    FirebaseFirestore.instance.collection('user_notifications').doc(docId).update({'isRead': true});
+    FirebaseFirestore.instance.collection('notifications').doc(docId).update({'isRead': true});
   }
 
   void _clearAllNotifications() async {
-    final snapshots = await FirebaseFirestore.instance.collection('user_notifications').get();
+    final snapshots = await FirebaseFirestore.instance
+        .collection('notifications')
+        .where('userEmail', isEqualTo: _userEmail)
+        .get();
     for (var doc in snapshots.docs) {
       await doc.reference.delete();
     }
@@ -129,8 +135,11 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
         ),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        // Sắp xếp real-time theo thời gian tạo mới nhất lên đầu
-        stream: FirebaseFirestore.instance.collection('user_notifications').orderBy('created_at', descending: true).snapshots(),
+        stream: FirebaseFirestore.instance
+            .collection('notifications')
+            .where('userEmail', isEqualTo: _userEmail)
+            .orderBy('createdAt', descending: true)
+            .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.amber));
@@ -214,7 +223,7 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
               child: const Icon(Icons.delete_sweep_rounded, color: Colors.redAccent, size: 24),
             ),
             onDismissed: (direction) {
-              FirebaseFirestore.instance.collection('user_notifications').doc(doc.id).delete();
+              FirebaseFirestore.instance.collection('notifications').doc(doc.id).delete();
             },
             child: GestureDetector(
               onTap: () => _markAsRead(doc.id),
@@ -265,12 +274,12 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
                           ),
                           const SizedBox(height: 6),
                           Text(
-                            noti['content'] ?? '',
+                            noti['body'] ?? noti['content'] ?? '',
                             style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.4),
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            _formatNotificationTime(noti['created_at'], noti['time']),
+                            _formatNotificationTime(noti['createdAt'] ?? noti['created_at'], null),
                             style: const TextStyle(color: Colors.white38, fontSize: 10),
                           ),
                         ],

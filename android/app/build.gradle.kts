@@ -8,12 +8,12 @@ plugins {
 android {
     namespace = "com.example.dat_ve_xem_phim_group5"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = "27.0.12077973"
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     defaultConfig {
@@ -45,7 +45,7 @@ android {
 // ✅ ĐÂY RỒI!!! ĐẶT BLOCK ÉP JVM 1.8 NGOÀI KHỐI ANDROID THEO CHUẨN KOTLIN MỚI ĐỂ KHÔNG BỊ BÁO LỖI DEPRECATED DƯỚI NỀN KTS
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinJvmCompile>().configureEach {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_1_8)
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
 }
 

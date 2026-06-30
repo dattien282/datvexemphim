@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
 class MyTicketsScreen extends StatefulWidget {
@@ -56,14 +57,15 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
                 );
 
                 try {
-                  // 1. Bắn thông báo hủy vé liên thông vào đúng bộ sưu tập 'user_notifications'
-                  await FirebaseFirestore.instance.collection('user_notifications').add({
+                  // Ghi thông báo hủy vé vào collection 'notifications'
+                  final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
+                  await FirebaseFirestore.instance.collection('notifications').add({
                     'title': 'HỦY VÉ HOÀN TIỀN THÀNH CÔNG 💸',
-                    'content': 'Stella Cinema xác nhận yêu cầu hủy vé phim "$title" của Quý khách đã được phê duyệt thành công. Số tiền hoàn lại đã được gửi trả về tài khoản nguồn của bạn.',
-                    'time': DateFormat('HH:mm - dd/MM/yyyy').format(DateTime.now()),
+                    'body': 'Stella Cinema xác nhận yêu cầu hủy vé phim "$title" đã được phê duyệt. Số tiền hoàn lại đã được gửi về ví của bạn.',
+                    'userEmail': userEmail,
                     'type': 'system',
                     'isRead': false,
-                    'created_at': Timestamp.now(),
+                    'createdAt': Timestamp.now(),
                   });
 
                   // 2. Chuyển trạng thái vé thành CANCELLED thay vì xóa hẳn (lịch sử vé)

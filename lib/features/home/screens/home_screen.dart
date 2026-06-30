@@ -21,25 +21,60 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
-  final PageController _bannerController = PageController();
-  int _currentBannerIndex = 0;
-  String _searchQuery = '';
-  String _selectedCategory = 'Tất cả';
+  final ValueNotifier<String> _searchQuery = ValueNotifier('');
+  final ValueNotifier<String> _selectedCategory = ValueNotifier('Tất cả');
   final List<String> _categories = ['Tất cả', 'Hành Động', 'Tâm Lý', 'Kịch Tính', 'Kinh Dị', 'Hoạt Hình'];
 
-  final List<String> bannerImages = [
-    'https://cdn.galaxycine.vn/media/2024/2/20/tai-tu-dien-trai-lee-do-hyun-khien-fan-viet-dung-ngoi-khong-yen-trong-quat-mo-trung-doc-1_1708422340574.jpg',
-    'https://cdn.galaxycine.vn/media/2024/1/25/mai-1_1706173004810.jpg',
-    'https://cdn.galaxycine.vn/media/2024/2/27/dune-part-two-2_1709026410403.jpg',
-    'https://cdn.galaxycine.vn/media/2024/3/7/kungfu-panda-4-1_1709799292881.jpg',
-    'https://cdn.galaxycine.vn/media/2024/3/22/godzilla-x-kong-de-che-moi-1_1711093121570.jpg',
+  final List<_BannerItem> bannerItems = const [
+    _BannerItem(
+      imageUrl: 'https://image.tmdb.org/t/p/original/7cuXIFqZLUWDyfDRue02eqmcUtT.jpg',
+      badge: 'ĐANG CHIẾU',
+      badgeColor: Color(0xFFE53935),
+      title: 'MAI',
+      subtitle: 'Trấn Thành • Tâm Lý, Tình Cảm • Rating 8.5⭐',
+      action: _BannerAction.movie,
+      movieTitle: 'Mai',
+    ),
+    _BannerItem(
+      imageUrl: 'https://image.tmdb.org/t/p/original/6dasJ58GGFcC62H9KuukAryltUp.jpg',
+      badge: 'HOT',
+      badgeColor: Color(0xFFFF6F00),
+      title: 'QUẬT MỘ TRÙNG MA',
+      subtitle: 'Choi Min-sik, Lee Do-hyun • Kinh Dị, Kịch Tính • Rating 9.2⭐',
+      action: _BannerAction.movie,
+      movieTitle: 'Quật Mộ Trùng Ma',
+    ),
+    _BannerItem(
+      imageUrl: 'https://upload.wikimedia.org/wikipedia/en/5/52/Dune_Part_Two_poster.jpeg',
+      badge: 'SẮP CHIẾU',
+      badgeColor: Color(0xFF1565C0),
+      title: 'DUNE: PHẦN 2',
+      subtitle: 'Denis Villeneuve • Hành Động, Sci-Fi • Rating 9.4⭐',
+      action: _BannerAction.movie,
+      movieTitle: 'Dune: Hành Tinh Cát - Phần 2',
+    ),
+    _BannerItem(
+      imageUrl: 'https://images.unsplash.com/photo-1585647347483-22b66260dfff?w=800&q=80',
+      badge: 'KHUYẾN MÃI',
+      badgeColor: Color(0xFF2E7D32),
+      title: 'COMBO CUỐI TUẦN',
+      subtitle: 'Mua 2 vé + 2 bắp nước chỉ từ 299.000đ • T7 & CN',
+      action: _BannerAction.combo,
+    ),
+    _BannerItem(
+      imageUrl: 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?w=800&q=80',
+      badge: 'ƯU ĐÃI THÀNH VIÊN',
+      badgeColor: Color(0xFF6A1B9A),
+      title: 'STELLA MEMBER VIP',
+      subtitle: 'Tích điểm mỗi vé • Đổi quà hấp dẫn • Ưu tiên chỗ ngồi',
+      action: _BannerAction.profile,
+    ),
   ];
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _autoScrollBanners();
     _seedDatabaseIfNeeded();
   }
 
@@ -461,25 +496,75 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     return true;
   }
 
-  void _autoScrollBanners() {
-    Future.delayed(const Duration(seconds: 4), () {
-      if (!mounted) return;
-      if (_bannerController.hasClients) {
-        _currentBannerIndex = (_currentBannerIndex + 1) % bannerImages.length;
-        _bannerController.animateToPage(
-          _currentBannerIndex,
-          duration: const Duration(milliseconds: 800),
-          curve: Curves.fastOutSlowIn,
+  void _handleBannerTap(_BannerItem item) async {
+    switch (item.action) {
+      case _BannerAction.movie:
+        final title = item.movieTitle;
+        if (title == null) return;
+        // Hiện loading
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const Center(child: CircularProgressIndicator(color: Colors.amber)),
         );
-        _autoScrollBanners();
-      }
-    });
+        try {
+          final snap = await FirebaseFirestore.instance
+              .collection('movies')
+              .where('title', isEqualTo: title)
+              .limit(1)
+              .get();
+          if (!mounted) return;
+          Navigator.pop(context); // đóng loading
+          if (snap.docs.isEmpty) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không tìm thấy thông tin phim.')),
+            );
+            return;
+          }
+          final movieData = {'id': snap.docs.first.id, ...snap.docs.first.data()};
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => MovieDetailScreen(movieData: movieData)),
+          );
+        } catch (e) {
+          if (mounted) {
+            Navigator.pop(context);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Lỗi tải thông tin phim: $e')),
+            );
+          }
+        }
+        break;
+
+      case _BannerAction.combo:
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Chọn phim & suất chiếu trước để áp dụng ưu đãi Combo nhé!'),
+            backgroundColor: const Color(0xFF2E7D32),
+            action: SnackBarAction(
+              label: 'CHỌN PHIM',
+              textColor: Colors.amber,
+              onPressed: () => _tabController.animateTo(0),
+            ),
+          ),
+        );
+        break;
+
+      case _BannerAction.profile:
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+        );
+        break;
+    }
   }
 
   @override
   void dispose() {
     _tabController.dispose();
-    _bannerController.dispose();
+    _searchQuery.dispose();
+    _selectedCategory.dispose();
     super.dispose();
   }
 
@@ -606,33 +691,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 1. Banner Carousel
-                  Container(
-                    height: 180,
-                    margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(16),
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 8, offset: const Offset(0, 4))],
-                    ),
-                    clipBehavior: Clip.antiAlias,
-                    child: PageView.builder(
-                      controller: _bannerController,
-                      itemCount: bannerImages.length,
-                      itemBuilder: (context, index) {
-                        return CachedNetworkImage(
-                          imageUrl: bannerImages[index],
-                          fit: BoxFit.cover,
-                          placeholder: (context, url) => const Center(child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2)),
-                          errorWidget: (context, url, error) => Container(
-                            color: const Color(0xFF222232),
-                            child: const Icon(Icons.movie_creation_rounded, color: Colors.white30, size: 40),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
+                  // 1. Banner Carousel – widget riêng, setState không ảnh hưởng HomeScreen
+                  _BannerCarousel(items: bannerItems, onTap: _handleBannerTap),
 
-                  // 2. Search Bar
+                  // 2. Search Bar – ValueNotifier thay setState
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: TextField(
@@ -646,11 +708,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         contentPadding: const EdgeInsets.symmetric(vertical: 12),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                       ),
-                      onChanged: (value) {
-                        setState(() {
-                          _searchQuery = value;
-                        });
-                      },
+                      onChanged: (value) => _searchQuery.value = value,
                     ),
                   ),
 
@@ -663,31 +721,32 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       itemCount: _categories.length,
                       itemBuilder: (context, index) {
                         final cat = _categories[index];
-                        final isSel = _selectedCategory == cat;
-                        return GestureDetector(
-                          onTap: () {
-                            setState(() {
-                              _selectedCategory = cat;
-                            });
-                          },
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(horizontal: 4),
-                            padding: const EdgeInsets.symmetric(horizontal: 16),
-                            decoration: BoxDecoration(
-                              color: isSel ? Colors.amber : const Color(0xFF16161F),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.04)),
-                            ),
-                            alignment: Alignment.center,
-                            child: Text(
-                              cat,
-                              style: TextStyle(
-                                color: isSel ? Colors.black : Colors.white70,
-                                fontSize: 11,
-                                fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                        return ValueListenableBuilder<String>(
+                          valueListenable: _selectedCategory,
+                          builder: (_, selected, __) {
+                            final isSel = selected == cat;
+                            return GestureDetector(
+                              onTap: () => _selectedCategory.value = cat,
+                              child: Container(
+                                margin: const EdgeInsets.symmetric(horizontal: 4),
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: isSel ? Colors.amber : const Color(0xFF16161F),
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.04)),
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  cat,
+                                  style: TextStyle(
+                                    color: isSel ? Colors.black : Colors.white70,
+                                    fontSize: 11,
+                                    fontWeight: isSel ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
+                            );
+                          },
                         );
                       },
                     ),
@@ -730,32 +789,33 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildMovieGrid({required bool isShowingNow}) {
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('movies').snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.amber));
-        }
+    return ValueListenableBuilder<String>(
+      valueListenable: _searchQuery,
+      builder: (_, search, __) => ValueListenableBuilder<String>(
+        valueListenable: _selectedCategory,
+        builder: (_, category, __) => StreamBuilder<QuerySnapshot>(
+          stream: FirebaseFirestore.instance.collection('movies').snapshots(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator(color: Colors.amber));
+            }
 
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const Center(child: Text('Không có phim nào khả dụng.', style: TextStyle(color: Colors.grey)));
-        }
+            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+              return const Center(child: Text('Không có phim nào khả dụng.', style: TextStyle(color: Colors.grey)));
+            }
 
-        final allMovies = snapshot.data!.docs;
-        final filteredMovies = allMovies.where((doc) {
-          final data = doc.data() as Map<String, dynamic>;
-          
-          // Lọc theo trạng thái Đang Chiếu (isShowingNow = true) / Sắp Chiếu (isShowingNow = false)
-          final movieIsShowing = data['isShowingNow'] ?? true;
-          if (movieIsShowing != isShowingNow) return false;
-          
-          final title = (data['title'] ?? '').toString().toLowerCase();
-          final genre = (data['genre'] ?? '').toString().toLowerCase();
-          final matchesSearch = title.contains(_searchQuery.toLowerCase());
-          final matchesCategory = _selectedCategory == 'Tất cả' ||
-              genre.contains(_selectedCategory.toLowerCase());
-          return matchesSearch && matchesCategory;
-        }).toList();
+            final allMovies = snapshot.data!.docs;
+            final filteredMovies = allMovies.where((doc) {
+              final data = doc.data() as Map<String, dynamic>;
+              final movieIsShowing = data['isShowingNow'] ?? true;
+              if (movieIsShowing != isShowingNow) return false;
+              final title = (data['title'] ?? '').toString().toLowerCase();
+              final genre = (data['genre'] ?? '').toString().toLowerCase();
+              final matchesSearch = title.contains(search.toLowerCase());
+              final matchesCategory = category == 'Tất cả' ||
+                  genre.contains(category.toLowerCase());
+              return matchesSearch && matchesCategory;
+            }).toList();
 
         if (filteredMovies.isEmpty) {
           return const Center(child: Text('Không tìm thấy phim phù hợp.', style: TextStyle(color: Colors.grey)));
@@ -889,6 +949,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           },
         );
       },
+        ),
+      ),
     );
   }
 
@@ -1327,4 +1389,162 @@ class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
   bool shouldRebuild(_SliverAppBarDelegate oldDelegate) {
     return false;
   }
+}
+
+enum _BannerAction { movie, combo, profile }
+
+// ── Banner Carousel – widget độc lập, setState không lan lên HomeScreen ───────
+class _BannerCarousel extends StatefulWidget {
+  final List<_BannerItem> items;
+  final void Function(_BannerItem) onTap;
+  const _BannerCarousel({required this.items, required this.onTap});
+
+  @override
+  State<_BannerCarousel> createState() => _BannerCarouselState();
+}
+
+class _BannerCarouselState extends State<_BannerCarousel> {
+  final PageController _ctrl = PageController();
+  int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _autoScroll();
+  }
+
+  void _autoScroll() {
+    Future.delayed(const Duration(seconds: 4), () {
+      if (!mounted) return;
+      _index = (_index + 1) % widget.items.length;
+      if (_ctrl.hasClients) {
+        _ctrl.animateToPage(_index,
+            duration: const Duration(milliseconds: 800), curve: Curves.fastOutSlowIn);
+      }
+      _autoScroll();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 200,
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(18),
+            child: PageView.builder(
+              controller: _ctrl,
+              itemCount: widget.items.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, index) {
+                final item = widget.items[index];
+                return GestureDetector(
+                  onTap: () => widget.onTap(item),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      CachedNetworkImage(
+                        imageUrl: item.imageUrl,
+                        fit: BoxFit.cover,
+                        placeholder: (_, __) => Container(color: const Color(0xFF222232)),
+                        errorWidget: (_, __, ___) => Container(
+                          color: const Color(0xFF222232),
+                          child: const Icon(Icons.movie_creation_rounded, color: Colors.white30, size: 48),
+                        ),
+                      ),
+                      Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.black.withValues(alpha: 0.3),
+                              Colors.black.withValues(alpha: 0.85),
+                            ],
+                            stops: const [0.3, 0.6, 1.0],
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        left: 16, right: 16, bottom: 16,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(color: item.badgeColor, borderRadius: BorderRadius.circular(6)),
+                              child: Text(item.badge,
+                                  style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(item.title,
+                                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w900, letterSpacing: 0.5,
+                                    shadows: [Shadow(color: Colors.black54, blurRadius: 4)])),
+                            const SizedBox(height: 4),
+                            Text(item.subtitle,
+                                style: TextStyle(color: Colors.white.withValues(alpha: 0.8), fontSize: 11, height: 1.3),
+                                maxLines: 2, overflow: TextOverflow.ellipsis),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          // Dots indicator
+          Positioned(
+            right: 12, bottom: 12,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(widget.items.length, (i) {
+                final active = i == _index;
+                return AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
+                  margin: const EdgeInsets.only(left: 4),
+                  width: active ? 16 : 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: active ? Colors.amber : Colors.white38,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BannerItem {
+  final String imageUrl;
+  final String badge;
+  final Color badgeColor;
+  final String title;
+  final String subtitle;
+  final _BannerAction action;
+  final String? movieTitle; // dùng khi action == movie
+
+  const _BannerItem({
+    required this.imageUrl,
+    required this.badge,
+    required this.badgeColor,
+    required this.title,
+    required this.subtitle,
+    required this.action,
+    this.movieTitle,
+  });
 }

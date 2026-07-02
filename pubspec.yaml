@@ -65,9 +65,11 @@ dependencies:
   http: ^1.6.0
   google_sign_in: ^6.2.1
   shared_preferences: ^2.3.2
-  add_2_calendar: ^3.0.1
+  add_2_calendar: 3.0.1
   pdf: ^3.11.1
   printing: ^5.13.4
   excel: ^4.0.6
   share_plus: ^10.1.4
   path_provider: ^2.1.5
+  flutter_markdown: ^0.7.7+1
+  speech_to_text: ^7.4.0

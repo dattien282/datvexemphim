@@ -4,13 +4,25 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'my_tickets_screen.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../../notifications/screens/notification_service.dart';
+import '../../home/screens/home_screen.dart';
+import '../../../core/constants.dart';
+import 'age_verification_screen.dart';
+import '../services/discount_service.dart';
+import '../services/discount_service.dart';
+import '../services/age_verification_service.dart';
+import '../services/payment_service.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> movieData;
   final List<String> selectedSeats;
   final int totalPrice;
   final List<Map<String, dynamic>> combos;
+  final DateTime? expiryTime;
 
   const PaymentScreen({
     super.key,
@@ -18,7 +30,10 @@ class PaymentScreen extends StatefulWidget {
     required this.selectedSeats,
     required this.totalPrice,
     this.combos = const [],
+    this.expiryTime,
   });
+
+  static const String backendBaseUrl = AppConfig.paymentBackendUrl;
 
   @override
   State<PaymentScreen> createState() => _PaymentScreenState();
@@ -32,15 +47,84 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String? _appliedVoucher;
   String? _voucherError;
   bool _isProcessing = false;
-  
+
+  // Vé PENDING vừa tạo (luồng PayOS) - nếu khách bỏ ngang thanh toán (bấm
+  // "HỦY GIAO DỊCH", để hết giờ đếm ngược, hoặc thoát màn hình), vé PENDING
+  // này phải được hủy để nhả ghế ra, nếu không seat_booking_screen.dart sẽ
+  // coi ghế đó là "đã bán" vĩnh viễn (chỉ lọc theo paymentStatus != CANCELLED).
+  DocumentReference<Map<String, dynamic>>? _pendingTicketRef;
+  bool _paymentCompleted = false;
+
+  Future<void> _cancelPendingTicketIfAny() async {
+    final ref = _pendingTicketRef;
+    if (ref == null || _paymentCompleted) return;
+    _pendingTicketRef = null;
+    try {
+      await ref.update({'paymentStatus': 'CANCELLED'});
+    } catch (e) {
+      debugPrint('Không hủy được vé PENDING bỏ ngang: $e');
+    }
+  }
+
+  // Automatic discounts
+  int _membershipDiscountPct = 0;
+  String _membershipTierName = '';
+  bool _isHappyWednesday = false;
+  int _autoDiscountAmount = 0;
+
   // Nâng cấp: Các phương thức thanh toán và điều khoản
   String _selectedPaymentMethod = 'bank'; // 'bank' hoặc 'wallet'
   bool _agreedToTerms = false;
 
+  // Vé phim mác T18: nếu tuổi khai báo (birthDate lúc đăng ký) dưới 18, phải
+  // xác minh CCCD thật (khai gian tuổi) mới được đặt tiếp - lưu lại số CCCD
+  // đã nhập vào vé để nhân viên soát vé có thể đối chiếu tại rạp nếu cần.
+  String? _verifiedCccd;
+
   @override
   void initState() {
     super.initState();
-    _startTimer();
+    _initAfterAgeGate();
+  }
+
+  Future<void> _initAfterAgeGate() async {
+    final ageResult = await AgeVerificationService().checkAgeRestrictionIfNeeded(context, widget.movieData);
+    if (!ageResult.canProceed) {
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    if (ageResult.verifiedCccd != null) {
+      _verifiedCccd = ageResult.verifiedCccd;
+    }
+    _calculateAutomaticDiscounts();
+    if (widget.expiryTime != null) {
+      _secondsRemaining = widget.expiryTime!.difference(DateTime.now()).inSeconds;
+      if (_secondsRemaining < 0) _secondsRemaining = 0;
+    }
+    if (_secondsRemaining > 0) {
+      _startTimer();
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _handleTimeout();
+      });
+    }
+  }
+
+
+  void _calculateAutomaticDiscounts() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null) return;
+    
+    final result = await DiscountService().calculateDiscounts(user.email!);
+    
+    if (mounted) {
+      setState(() {
+        _isHappyWednesday = result.isHappyWednesday;
+        _membershipTierName = result.tierName;
+        _membershipDiscountPct = result.membershipPct;
+        _autoDiscountAmount = (widget.totalPrice * result.totalAutoPct / 100).round();
+      });
+    }
   }
 
   void _startTimer() {
@@ -80,13 +164,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   void _handleTimeout() {
     _clearTemporaryLocks();
+    _cancelPendingTicketIfAny();
     if (!mounted) return;
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
-          backgroundColor: const Color(0xFF16161F),
+          backgroundColor: const Color(0xFF0A0A0A),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           child: Padding(
             padding: const EdgeInsets.all(24.0),
@@ -148,31 +233,28 @@ class _PaymentScreenState extends State<PaymentScreen> {
     setState(() { _voucherError = null; });
 
     try {
-      final snap = await FirebaseFirestore.instance
-          .collection('promotions')
-          .where('code', isEqualTo: code)
-          .where('isActive', isEqualTo: true)
-          .limit(1)
-          .get();
+      final result = await DiscountService().validateVoucher(
+        code: code,
+        totalPrice: widget.totalPrice,
+        selectedTheater: widget.movieData['selectedTheater'] as String?,
+      );
 
-      if (snap.docs.isEmpty) {
+      if (!result.isValid) {
         setState(() {
-          _voucherError = 'Mã giảm giá không hợp lệ hoặc đã hết hạn!';
+          _voucherError = result.errorMessage;
           _discountAmount = 0;
           _appliedVoucher = null;
         });
         return;
       }
 
-      final promo = snap.docs.first.data();
-      final int discount = (promo['discount'] as num? ?? 0).toInt();
       setState(() {
-        _discountAmount = discount;
-        _appliedVoucher = code;
+        _discountAmount = result.discountAmount;
+        _appliedVoucher = result.appliedCode;
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Áp dụng thành công: ${promo['title']} - giảm ${discount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')} đ'), backgroundColor: Colors.green),
+          SnackBar(content: Text('Áp dụng thành công: giảm ${result.discountAmount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')} đ'), backgroundColor: Colors.green),
         );
       }
     } catch (e) {
@@ -185,6 +267,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _timer?.cancel();
     _voucherController.dispose();
     _clearTemporaryLocks(); // Xóa giữ ghế tạm thời nếu thoát đột ngột
+    _cancelPendingTicketIfAny(); // Hủy vé PENDING nếu thoát màn hình giữa chừng
     super.dispose();
   }
 
@@ -194,7 +277,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return Dialog(
-          backgroundColor: const Color(0xFF16161F),
+          backgroundColor: const Color(0xFF0A0A0A),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
           child: Padding(
             padding: const EdgeInsets.all(24.0),
@@ -227,11 +310,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   height: 45,
                   child: ElevatedButton(
                     onPressed: () {
-                      Navigator.pop(dialogContext);
+                      Navigator.pop(dialogContext); // Đóng popup
+                      // Reset lại toàn bộ stack về HomeScreen, sau đó đè MyTicketsScreen lên trên
                       Navigator.pushAndRemoveUntil(
                         context,
+                        MaterialPageRoute(builder: (context) => const HomeScreen()),
+                        (route) => false,
+                      );
+                      Navigator.push(
+                        context,
                         MaterialPageRoute(builder: (context) => const MyTicketsScreen()),
-                        (route) => route.isFirst,
                       );
                     },
                     style: ElevatedButton.styleFrom(
@@ -253,7 +341,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void _showTermsAndConditions() {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF16161F),
+      backgroundColor: const Color(0xFF0A0A0A),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) {
         return Padding(
@@ -291,104 +379,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  void _handleConfirmPayment() {
-    // 1. Sinh mã OTP bảo mật giả lập gửi tới email người dùng (Mục 7)
-    final String generatedOtp = (100000 + (DateTime.now().microsecondsSinceEpoch % 900000)).toString();
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🔑 [Stella Pay OTP]: Mã xác thực giao dịch của bạn là: $generatedOtp'),
-        backgroundColor: Colors.amber,
-        duration: const Duration(seconds: 15),
-      ),
-    );
-
-    final otpController = TextEditingController();
-    String? otpError;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF16161F),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Row(
-                children: [
-                  Icon(Icons.security_rounded, color: Colors.amber, size: 22),
-                  SizedBox(width: 8),
-                  Text(
-                    'XÁC THỰC MÃ OTP',
-                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                  ),
-                ],
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Để đảm bảo an toàn giao dịch, vui lòng nhập mã OTP 6 số đã được gửi tới Email đăng ký của bạn.',
-                    style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: otpController,
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white, fontSize: 15, letterSpacing: 4),
-                    maxLength: 6,
-                    decoration: InputDecoration(
-                      hintText: '      ******',
-                      hintStyle: const TextStyle(color: Colors.white24),
-                      filled: true,
-                      fillColor: const Color(0xFF0F0F13),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                      errorText: otpError,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    ),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(dialogContext);
-                  },
-                  child: const Text('HỦY BỎ', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 12)),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    final enteredOtp = otpController.text.trim();
-                    if (enteredOtp == generatedOtp) {
-                      Navigator.pop(dialogContext); // Đóng dialog OTP
-                      _executePayment(); // Thực hiện thanh toán thực tế!
-                    } else {
-                      setDialogState(() {
-                        otpError = 'Mã OTP xác thực không đúng!';
-                      });
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                  child: const Text('XÁC NHẬN', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+  void _incrementVoucherUsageIfApplied() {
+    if (_appliedVoucher == null) return;
+    // Best-effort, không dùng transaction: chấp nhận rủi ro hiếm gặp là
+    // currentUses vượt nhẹ maxUses nếu nhiều người dùng cùng lúc (đã ghi
+    // chú trong AUDIT_AND_ROADMAP.md, ưu tiên thấp hơn các lỗi P0/P1 khác).
+    FirebaseFirestore.instance.collection('vouchers').doc(_appliedVoucher).update({
+      'currentUses': FieldValue.increment(1),
+    }).catchError((_) {});
   }
 
-  void _executePayment() async {
-    final user = FirebaseAuth.instance.currentUser;
-    final finalPrice = (widget.totalPrice - _discountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount);
+  void _handleConfirmPayment() {
+    // Nếu dùng Ví ảo, xử lý trực tiếp không qua PayOS
+    if (_selectedPaymentMethod == 'wallet') {
+      _executeWalletPayment();
+      return;
+    }
 
-    _timer?.cancel(); // Dừng bộ đếm ngược
+    // Nếu qua Ngân hàng, dùng PayOS
+    _processPayOSPayment();
+  }
+
+  void _processPayOSPayment() async {
+    final finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
+    
+    if (finalPrice <= 0) {
+      _executeWalletPayment(); // Miễn phí thì duyệt luôn
+      return;
+    }
+
+    _timer?.cancel();
     setState(() => _isProcessing = true);
 
     showDialog(
@@ -397,97 +417,186 @@ class _PaymentScreenState extends State<PaymentScreen> {
       builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.amber)),
     );
 
-    try {
-      // 1. Kiểm tra ví Stella Wallet nếu dùng phương thức Ví
-      if (_selectedPaymentMethod == 'wallet') {
-        final userDoc = await FirebaseFirestore.instance.collection('users').doc(user?.uid).get();
-        final int balance = userDoc.data()?['wallet_balance'] ?? 0;
-        if (balance < finalPrice) {
-          if (mounted) {
-            Navigator.pop(context); // Tắt loading
-            setState(() => _isProcessing = false);
-            showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                backgroundColor: const Color(0xFF16161F),
-                title: const Text('SỐ DƯ KHÔNG ĐỦ', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
-                content: const Text('Số dư ví Stella Wallet không đủ để thanh toán. Vui lòng nạp tiền thêm hoặc chọn chuyển khoản ngân hàng.', style: TextStyle(color: Colors.white70, fontSize: 13)),
-                actions: [
-                  TextButton(onPressed: () => Navigator.pop(context), child: const Text('XÁC NHẬN', style: TextStyle(color: Colors.amber))),
-                ],
+    final paymentService = PaymentService();
+    final result = await paymentService.createPayOSPayment(
+      finalPrice: finalPrice,
+      movieData: widget.movieData,
+      selectedSeats: widget.selectedSeats,
+      combos: widget.combos,
+      totalPrice: widget.totalPrice,
+      discountAmount: _discountAmount,
+      appliedVoucher: _appliedVoucher,
+      verifiedCccd: _verifiedCccd,
+    );
+
+    if (!mounted) return;
+    Navigator.pop(context); // Tắt loading
+
+    if (!result.success) {
+      setState(() => _isProcessing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message ?? 'Lỗi không xác định'), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    _pendingTicketRef = result.ticketRef;
+
+    StreamSubscription<DocumentSnapshot>? sub;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF0A0A0A),
+          title: const Text('QUÉT MÃ ĐỂ THANH TOÁN', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 200,
+                height: 200,
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+                  child: QrImageView(
+                    data: result.qrCodeString ?? '',
+                    version: QrVersions.auto,
+                    size: 200.0,
+                  ),
+                ),
               ),
-            );
-          }
-          return;
+              const SizedBox(height: 16),
+              Text(
+                'Số tiền: ${NumberFormat.currency(locale: 'vi_VN', symbol: 'đ').format(result.amountToPay ?? 0)}',
+                style: const TextStyle(color: Colors.amber, fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Mở ứng dụng ngân hàng để quét mã VietQR. Hệ thống tự động xác nhận sau khi thanh toán thành công.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              const CircularProgressIndicator(color: Colors.amber, strokeWidth: 2),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                sub?.cancel();
+                Navigator.pop(dialogCtx);
+                _cancelPendingTicketIfAny();
+                setState(() => _isProcessing = false);
+                _startTimer();
+              },
+              child: const Text('HỦY GIAO DỊCH', style: TextStyle(color: Colors.grey)),
+            )
+          ],
+        );
+      }
+    );
+
+    sub = result.ticketRef!.snapshots().listen((doc) async {
+      if (doc.exists && doc.data()!['paymentStatus'] == 'COMPLETED') {
+        sub?.cancel();
+        _paymentCompleted = true;
+
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
         }
 
-        // Trừ tiền ví ảo
-        await FirebaseFirestore.instance.collection('users').doc(user?.uid).update({
-          'wallet_balance': balance - finalPrice,
-        });
-      }
+        await paymentService.sendPayOSSuccessNotification(
+          movieTitle: widget.movieData['title'] ?? 'Phim Stella Cinema',
+        );
 
-      final String userEmail = user?.email ?? 'anonymous';
-      final String movieTitle = widget.movieData['title'] ?? 'Phim Stella Cinema';
-      final String posterUrl = widget.movieData['posterUrl'] ?? '';
-
-      // 2. Ghi đè vé vào collection 'tickets'
-      await FirebaseFirestore.instance.collection('tickets').add({
-        'title': movieTitle,
-        'posterUrl': posterUrl,
-        'seats': widget.selectedSeats,
-        'total_amount': finalPrice,
-        'payment_status': 'COMPLETED',
-        'created_at': Timestamp.now(),
-        'combos': widget.combos,
-        'voucher_code': _appliedVoucher,
-        'discount_amount': _discountAmount,
-        'showtime': '${widget.movieData['selectedTheater']} | ${widget.movieData['selectedDate']} | ${widget.movieData['selectedTime']}',
-        'email': userEmail,
-      });
-
-      // 3. Đẩy thông báo đặt vé thành công vào collection 'notifications'
-      await FirebaseFirestore.instance.collection('notifications').add({
-        'title': 'ĐẶT VÉ THÀNH CÔNG 🎉',
-        'body': 'Chúc mừng bạn đã đặt thành công ghế: ${widget.selectedSeats.join(", ")} cho bộ phim "$movieTitle".',
-        'userEmail': userEmail,
-        'type': 'ticket',
-        'isRead': false,
-        'createdAt': Timestamp.now(),
-      });
-
-      // 4. Giải phóng ghế đang giữ tạm thời
-      _clearTemporaryLocks();
-
-      // 5. Kích hoạt Local Push Notification nhắc lịch chiếu sau 5 giây để mô phỏng kiểm thử
-      final theater = widget.movieData['selectedTheater'] ?? 'Stella Cinema';
-      final date = widget.movieData['selectedDate'] ?? '';
-      final time = widget.movieData['selectedTime'] ?? '';
-      Future.delayed(const Duration(seconds: 5), () {
         LocalNotificationService.showNotificationPopup(
-          title: '🎬 NHẮC LỊCH CHIẾU STELLA CINEMA',
-          body: 'Phim "$movieTitle" của bạn sẽ khởi chiếu lúc $time ngày $date tại $theater. Chuẩn bị bắp nước thôi ní ơi! 🍿',
+          title: 'Thanh toán PayOS thành công',
+          body: 'Vé xem phim ${widget.movieData['title']} của bạn đã sẵn sàng!',
         );
-      });
+        _incrementVoucherUsageIfApplied();
 
-      if (!mounted) return;
-      Navigator.pop(context); // Tắt xoay loading
-      _showSuccessDialog(); // Hiện popup thành công
-    } catch (e) {
-      if (mounted) {
-        Navigator.pop(context); // Tắt xoay loading
-        setState(() => _isProcessing = false);
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const MyTicketsScreen()),
+          );
+        }
+      }
+    });
+  }
+
+  void _executeWalletPayment() async {
+    final finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
+
+    _timer?.cancel();
+    setState(() => _isProcessing = true);
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Colors.amber)),
+    );
+
+    final paymentService = PaymentService();
+    final result = await paymentService.executeWalletPayment(
+      finalPrice: finalPrice,
+      movieData: widget.movieData,
+      selectedSeats: widget.selectedSeats,
+      combos: widget.combos,
+      totalPrice: widget.totalPrice,
+      discountAmount: _discountAmount,
+      appliedVoucher: _appliedVoucher,
+      verifiedCccd: _verifiedCccd,
+    );
+
+    if (!mounted) return;
+    Navigator.pop(context); // Tắt loading
+
+    if (!result.success) {
+      setState(() => _isProcessing = false);
+      if (result.message == 'INSUFFICIENT_BALANCE') {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: const Color(0xFF0A0A0A),
+            title: const Text('SỐ DƯ KHÔNG ĐỦ', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+            content: const Text('Số dư ví Stella Wallet không đủ để thanh toán. Vui lòng nạp tiền thêm hoặc chọn chuyển khoản ngân hàng.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('XÁC NHẬN', style: TextStyle(color: Colors.amber))),
+            ],
+          ),
+        );
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Lỗi xử lý thanh toán: $e'), backgroundColor: Colors.redAccent),
+          SnackBar(content: Text('Lỗi xử lý thanh toán: ${result.message}'), backgroundColor: Colors.redAccent),
         );
       }
+      return;
     }
+
+    _incrementVoucherUsageIfApplied();
+    _clearTemporaryLocks();
+
+    final movieTitle = widget.movieData['title'] ?? '';
+    final theater = widget.movieData['selectedTheater'] ?? 'Stella Cinema';
+    final date = widget.movieData['selectedDate'] ?? '';
+    final time = widget.movieData['selectedTime'] ?? '';
+
+    Future.delayed(const Duration(seconds: 5), () {
+      LocalNotificationService.showNotificationPopup(
+        title: '🎬 NHẮC LỊCH CHIẾU STELLA CINEMA',
+        body: 'Phim "$movieTitle" của bạn sẽ khởi chiếu lúc $time ngày $date tại $theater. Chuẩn bị bắp nước thôi ní ơi! 🍿',
+      );
+    });
+
+    _showSuccessDialog();
   }
 
   @override
   Widget build(BuildContext context) {
     final String movieTitle = widget.movieData['title'] ?? 'Phim Stella Cinema';
-    final int finalPrice = (widget.totalPrice - _discountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount);
+    final int finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
     final formatFinalPrice = finalPrice.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.');
 
     final minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
@@ -505,9 +614,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
         }
 
         return Scaffold(
-          backgroundColor: const Color(0xFF0F0F13),
+          backgroundColor: const Color(0xFF000000),
           appBar: AppBar(
-            backgroundColor: const Color(0xFF16161F),
+            backgroundColor: const Color(0xFF0A0A0A),
             elevation: 0,
             centerTitle: true,
             title: const Text('THANH TOÁN HÓA ĐƠN', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
@@ -547,7 +656,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: const Color(0xFF16161F), borderRadius: BorderRadius.circular(12)),
+                  decoration: BoxDecoration(color: const Color(0xFF0A0A0A), borderRadius: BorderRadius.circular(12)),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -588,6 +697,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           );
                         }),
                       ],
+                      if (_autoDiscountAmount > 0) ...[
+                        const Divider(color: Colors.white12, height: 16),
+                        if (_isHappyWednesday)
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text('Ưu đãi Thứ 4 Vui Vẻ:', style: TextStyle(color: Colors.lightGreenAccent, fontSize: 13)),
+                              const Text('-10%', style: TextStyle(color: Colors.lightGreenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                            ],
+                          ),
+                        if (_membershipDiscountPct > 0)
+                           Padding(
+                             padding: const EdgeInsets.only(top: 4.0),
+                             child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text('Ưu đãi hạng $_membershipTierName:', style: const TextStyle(color: Colors.amberAccent, fontSize: 13)),
+                                Text('-$_membershipDiscountPct%', style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                              ],
+                             ),
+                           ),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Giảm tự động:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                            Text('-${_autoDiscountAmount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')} đ', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                      ],
                       if (_discountAmount > 0) ...[
                         const Divider(color: Colors.white12, height: 16),
                         Row(
@@ -614,7 +753,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 // BỘ VOUCHER
                 Container(
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: const Color(0xFF16161F), borderRadius: BorderRadius.circular(12)),
+                  decoration: BoxDecoration(color: const Color(0xFF0A0A0A), borderRadius: BorderRadius.circular(12)),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -630,7 +769,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 hintText: 'Nhập mã (STELLA50, STELLA100)...',
                                 hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
                                 filled: true,
-                                fillColor: const Color(0xFF1E1E2A),
+                                fillColor: const Color(0xFF121212),
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                                 errorText: _voucherError,
@@ -670,7 +809,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF16161F),
+                      color: const Color(0xFF0A0A0A),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _selectedPaymentMethod == 'bank' ? Colors.amber : Colors.white.withValues(alpha: 0.05),
@@ -681,7 +820,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         Icon(Icons.qr_code_scanner_rounded, color: _selectedPaymentMethod == 'bank' ? Colors.amber : Colors.grey, size: 20),
                         const SizedBox(width: 12),
                         const Expanded(
-                          child: Text('Chuyển khoản Ngân hàng (TPBank QR)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
+                          child: Text('Chuyển khoản Ngân hàng (Mã VietQR)', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                         ),
                         if (_selectedPaymentMethod == 'bank')
                           const Icon(Icons.check_circle_rounded, color: Colors.amber, size: 18),
@@ -695,7 +834,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF16161F),
+                      color: const Color(0xFF0A0A0A),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
                         color: _selectedPaymentMethod == 'wallet' ? Colors.amber : Colors.white.withValues(alpha: 0.05),
@@ -731,41 +870,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
                 // HIỂN THỊ CHI TIẾT TỪNG PHƯƠNG THỨC
                 if (_selectedPaymentMethod == 'bank') ...[
-                  const Text('QUÉT MÃ ĐỂ TỰ ĐỘNG LÀM LỆNH CHUYỂN TIỀN', style: TextStyle(color: Colors.white60, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const Text('Bạn sẽ quét mã QR tự động sau khi ấn nút XÁC NHẬN THANH TOÁN', style: TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 14),
-                  Center(
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
-                      child: Image.network(
-                        'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=247Banking_StellaCinema_Amount_$formatFinalPrice',
-                        width: 180,
-                        height: 180,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 25),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: const Color(0xFF1E1E2A), borderRadius: BorderRadius.circular(12)),
-                    child: const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('• Ngân hàng: TPBank (Ngân hàng Tiên Phong)', style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.6)),
-                        Text('• Số tài khoản: 0000 9999 888', style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.6)),
-                        Text('• Tên tài khoản: STELLA CINEMA GROUP', style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.6)),
-                      ],
-                    ),
-                  ),
                 ] else ...[
                   // Giao diện thanh toán qua ví
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(vertical: 30, horizontal: 20),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF16161F),
+                      color: const Color(0xFF0A0A0A),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                     ),

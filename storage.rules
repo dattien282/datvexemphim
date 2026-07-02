@@ -1,0 +1,35 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function hasAdminAccess() {
+      return isSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        || isSignedIn() && firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin == true;
+    }
+
+    // Ảnh đại diện - chủ tài khoản tự đọc/ghi ảnh của mình, ai cũng đọc được
+    // (avatar hiển thị công khai trong app cho người khác xem, vd. review).
+    match /avatars/{uid}.jpg {
+      allow read: if true;
+      allow write: if isSignedIn() && request.auth.uid == uid &&
+        request.resource.size < 5 * 1024 * 1024 && request.resource.contentType.matches('image/.*');
+    }
+
+    // Ảnh CCCD xác minh độ tuổi - dữ liệu nhạy cảm, CHỈ chủ ảnh và admin đọc
+    // được, không công khai như avatar. Chủ ảnh chỉ được ghi vào đúng thư mục
+    // UID của mình.
+    match /age_verification/{uid}/{fileName} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || hasAdminAccess());
+      allow write: if isSignedIn() && request.auth.uid == uid &&
+        request.resource.size < 8 * 1024 * 1024 && request.resource.contentType.matches('image/.*');
+    }
+
+    // Mặc định từ chối mọi đường dẫn khác.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

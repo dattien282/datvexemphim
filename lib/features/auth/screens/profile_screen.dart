@@ -11,6 +11,7 @@ import '../../../providers/user_provider.dart';
 import '../../admin/screens/admin_dashboard_screen.dart';
 import '../../staff/screens/staff_dashboard_screen.dart';
 import '../../theater_manager/screens/theater_manager_dashboard_screen.dart';
+import '../viewmodels/auth_viewmodel.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -32,7 +33,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'CHỈNH SỬA HỒ SƠ',
@@ -89,7 +90,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         hintStyle: const TextStyle(color: Colors.white38),
         prefixIcon: Icon(icon, color: Colors.amber, size: 20),
         filled: true,
-        fillColor: const Color(0xFF1E1E2A),
+        fillColor: const Color(0xFF121212),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none,
@@ -162,7 +163,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     bool? confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('ĐĂNG XUẤT',
             style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
@@ -178,7 +179,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ),
     );
     if (confirm == true) {
-      await FirebaseAuth.instance.signOut();
+      await ref.read(authViewModelProvider.notifier).signOut();
       navigator.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const MainAppWrapper()),
         (route) => false,
@@ -192,7 +193,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('NẠP TIỀN STELLA WALLET',
             style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14)),
@@ -208,7 +209,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
               decoration: InputDecoration(
                 filled: true,
-                fillColor: const Color(0xFF1E1E2A),
+                fillColor: const Color(0xFF121212),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                 suffixText: 'đ',
                 suffixStyle: const TextStyle(color: Colors.amber),
@@ -223,7 +224,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   onTap: () => ctrl.text = amount.toString(),
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(color: const Color(0xFF1E1E2A), borderRadius: BorderRadius.circular(6)),
+                    decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(6)),
                     child: Text('+$label', style: const TextStyle(color: Colors.amber, fontSize: 11)),
                   ),
                 );
@@ -233,27 +234,33 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
-          ElevatedButton(
-            onPressed: () async {
-              final amount = int.tryParse(ctrl.text.trim()) ?? 0;
-              if (amount <= 0) return;
-              Navigator.pop(ctx);
-              final uid = _user?.uid;
-              if (uid != null) {
-                await FirebaseFirestore.instance.collection('users').doc(uid).set(
-                  {'wallet_balance': currentBalance + amount},
-                  SetOptions(merge: true),
-                );
+            ElevatedButton(
+              onPressed: () async {
+                final amount = int.tryParse(ctrl.text.trim()) ?? 0;
+                if (amount <= 0) return;
+                Navigator.pop(ctx);
+                
+                final authViewModel = ref.read(authViewModelProvider.notifier);
+                final result = await authViewModel.topUpWallet(amount);
+                
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Đã nạp ${_formatMoney(amount)} đ vào ví!'),
-                      backgroundColor: Colors.green,
-                    ),
-                  );
+                  if (result['success']) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Đã nạp ${_formatMoney(amount)} đ vào ví!'),
+                        backgroundColor: Colors.teal,
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(result['message'] ?? 'Nạp tiền thất bại'),
+                        backgroundColor: Colors.redAccent,
+                      ),
+                    );
+                  }
                 }
-              }
-            },
+              },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
             child: const Text('XÁC NHẬN', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
           ),
@@ -271,9 +278,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     final profileAsync = ref.watch(userProfileProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         centerTitle: true,
         title: const Text('HỒ SƠ CÁ NHÂN',
@@ -372,7 +379,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF1E272C), Color(0xFF0F2027)],
+                colors: [Color(0xFF1A1A1A), Color(0xFF000000)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -420,7 +427,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             width: double.infinity,
             padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
-              color: const Color(0xFF16161F),
+              color: const Color(0xFF0A0A0A),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.white.withOpacity(0.04)),
             ),
@@ -455,16 +462,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const SizedBox(height: 24),
 
           // ── Settings ─────────────────────────────────────────────────────
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF16161F),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.04)),
-            ),
-            child: Column(
-              children: [
+          Material(
+            color: const Color(0xFF0A0A0A),
+            borderRadius: BorderRadius.circular(16),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+              ),
+              child: Column(
+                children: [
                 ListTile(
                   leading: const Icon(Icons.lock_reset_rounded, color: Colors.amber),
                   title: const Text('Đặt lại mật khẩu', style: TextStyle(color: Colors.white, fontSize: 14)),
@@ -483,6 +492,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ),
               ],
             ),
+          ),
           ),
           const SizedBox(height: 48),
 
@@ -631,6 +641,10 @@ class _MembershipCard extends StatelessWidget {
   final String email;
   const _MembershipCard({required this.email});
 
+  String _formatMoney(int amount) {
+    return amount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.');
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot>(
@@ -639,21 +653,45 @@ class _MembershipCard extends StatelessWidget {
           .where('email', isEqualTo: email)
           .snapshots(),
       builder: (context, snapshot) {
-        final int ticketCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
-        final int points = ticketCount * 50;
+        int ticketCount = 0;
+        int totalSpent = 0;
 
-        String tierName = 'THÀNH VIÊN ĐỒNG';
+        if (snapshot.hasData) {
+          for (var doc in snapshot.data!.docs) {
+            final data = doc.data() as Map<String, dynamic>;
+            if (data['paymentStatus'] == 'COMPLETED') {
+              ticketCount++;
+              totalSpent += (data['totalAmount'] as num?)?.toInt() ?? 0;
+            }
+          }
+        }
+
+        final int points = totalSpent ~/ 10000;
+
+        String tierName = 'ĐỒNG (BRONZE)';
         List<Color> gradient = [const Color(0xFF8B5A2B), const Color(0xFFCD7F32), const Color(0xFFE5A65D)];
         Color tierColor = const Color(0xFFCD7F32);
+        String nextTierMsg = 'Cần chi tiêu thêm ${_formatMoney(1000000 - totalSpent)}đ để lên BẠC';
+        double progress = totalSpent / 1000000.0;
 
-        if (ticketCount >= 3 && ticketCount <= 5) {
-          tierName = 'THÀNH VIÊN BẠC';
-          gradient = [const Color(0xFF7F8C8D), const Color(0xFFBDC3C7), const Color(0xFFECF0F1)];
-          tierColor = const Color(0xFFBDC3C7);
-        } else if (ticketCount > 5) {
-          tierName = 'THÀNH VIÊN VÀNG VIP';
+        if (totalSpent >= 8000000) {
+          tierName = 'KIM CƯƠNG (DIAMOND)';
+          gradient = [const Color(0xFF4B0082), const Color(0xFF8A2BE2), const Color(0xFFDA70D6)];
+          tierColor = const Color(0xFFDA70D6);
+          nextTierMsg = 'Bạn đang ở hạng cao nhất!';
+          progress = 1.0;
+        } else if (totalSpent >= 3000000) {
+          tierName = 'VÀNG (GOLD VIP)';
           gradient = [const Color(0xFFD4AF37), const Color(0xFFF1C40F), const Color(0xFFF39C12)];
           tierColor = const Color(0xFFF1C40F);
+          nextTierMsg = 'Cần chi tiêu thêm ${_formatMoney(8000000 - totalSpent)}đ để lên KIM CƯƠNG';
+          progress = (totalSpent - 3000000) / 5000000.0;
+        } else if (totalSpent >= 1000000) {
+          tierName = 'BẠC (SILVER)';
+          gradient = [const Color(0xFF7F8C8D), const Color(0xFFBDC3C7), const Color(0xFFECF0F1)];
+          tierColor = const Color(0xFFBDC3C7);
+          nextTierMsg = 'Cần chi tiêu thêm ${_formatMoney(3000000 - totalSpent)}đ để lên VÀNG';
+          progress = (totalSpent - 1000000) / 2000000.0;
         }
 
         return Column(
@@ -678,7 +716,7 @@ class _MembershipCard extends StatelessWidget {
             const SizedBox(height: 16),
             Container(
               width: double.infinity,
-              height: 180,
+              padding: const EdgeInsets.all(20.0),
               decoration: BoxDecoration(
                 gradient: LinearGradient(colors: gradient, begin: Alignment.topLeft, end: Alignment.bottomRight),
                 borderRadius: BorderRadius.circular(20),
@@ -687,76 +725,100 @@ class _MembershipCard extends StatelessWidget {
               child: Stack(
                 children: [
                   Positioned(
-                    right: -50, bottom: -50,
+                    right: -70, bottom: -70,
                     child: Container(width: 200, height: 200, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(0.08))),
                   ),
                   Positioned(
                     right: 40, top: -60,
                     child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withOpacity(0.05))),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('STELLA CINEMA',
-                                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1.5)),
-                                Text('MEMBER PASS',
-                                    style: TextStyle(color: Colors.black54, fontWeight: FontWeight.bold, fontSize: 8, letterSpacing: 1.5)),
-                              ],
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(color: Colors.black.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
-                              child: const Text('G5', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 14)),
-                            ),
-                          ],
-                        ),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(email, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 13)),
-                            const SizedBox(height: 4),
-                            const Text('MÃ THẺ: STL-8290-7491',
-                                style: TextStyle(color: Colors.black45, fontFamily: 'monospace', fontSize: 10, fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('TỔNG ĐÃ MUA',
-                                    style: TextStyle(color: Colors.black54, fontSize: 8, fontWeight: FontWeight.bold)),
-                                Text('$ticketCount vé',
-                                    style: const TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                const Text('ĐIỂM TÍCH LŨY',
-                                    style: TextStyle(color: Colors.black54, fontSize: 8, fontWeight: FontWeight.bold)),
-                                Text('$points Pts',
-                                    style: const TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('STELLA CINEMA',
+                                  style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1.5)),
+                              Text('MEMBER PASS',
+                                  style: TextStyle(color: Colors.black54, fontWeight: FontWeight.bold, fontSize: 8, letterSpacing: 1.5)),
+                            ],
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.black.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+                            child: const Text('VIP', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 14)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(email, style: const TextStyle(color: Colors.black87, fontWeight: FontWeight.bold, fontSize: 13)),
+                          const SizedBox(height: 4),
+                          const Text('MÃ THẺ: STL-8290-7491',
+                              style: TextStyle(color: Colors.black45, fontFamily: 'monospace', fontSize: 10, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text('TỔNG CHI TIÊU',
+                                  style: TextStyle(color: Colors.black54, fontSize: 8, fontWeight: FontWeight.bold)),
+                              Text('${_formatMoney(totalSpent)} đ',
+                                  style: const TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              const Text('ĐIỂM TÍCH LŨY',
+                                  style: TextStyle(color: Colors.black54, fontSize: 8, fontWeight: FontWeight.bold)),
+                              Text('$points Pts',
+                                  style: const TextStyle(color: Colors.black, fontSize: 14, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(nextTierMsg, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                      Text('${(progress * 100).clamp(0, 100).toInt()}%', style: TextStyle(color: tierColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress.clamp(0.0, 1.0),
+                      backgroundColor: Colors.white10,
+                      valueColor: AlwaysStoppedAnimation<Color>(tierColor),
+                      minHeight: 6,
+                    ),
+                  )
+                ],
+              ),
+            )
           ],
         );
       },

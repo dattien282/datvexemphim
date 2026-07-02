@@ -13,7 +13,10 @@ class Movie {
   final String duration;
   final String releaseDate;
   final String description;
+  final String ageRating; // Phân loại độ tuổi: P, K, T13, T16, T18...
+  final String country; // Quốc gia sản xuất
   final bool isShowingNow;
+  final bool isDeleted;
 
   const Movie({
     required this.id,
@@ -27,7 +30,10 @@ class Movie {
     required this.duration,
     required this.releaseDate,
     required this.description,
+    this.ageRating = '',
+    this.country = '',
     required this.isShowingNow,
+    this.isDeleted = false,
   });
 
   factory Movie.fromDoc(DocumentSnapshot doc) {
@@ -44,7 +50,10 @@ class Movie {
       duration: (d['duration'] ?? '').toString(),
       releaseDate: (d['releaseDate'] ?? '').toString(),
       description: d['description'] ?? '',
+      ageRating: (d['ageRating'] ?? '').toString(),
+      country: (d['country'] ?? '').toString(),
       isShowingNow: d['isShowingNow'] == true,
+      isDeleted: d['isDeleted'] == true,
     );
   }
 
@@ -59,15 +68,20 @@ class Movie {
         'duration': duration,
         'releaseDate': releaseDate,
         'description': description,
+        'ageRating': ageRating,
+        'country': country,
         'isShowingNow': isShowingNow,
+        'isDeleted': isDeleted,
       };
 }
 
+// Phim đã bị admin "xóa" (soft delete) vẫn giữ trong Firestore để không mồ
+// côi các vé/đánh giá đã tham chiếu tới nó, chỉ ẩn khỏi mọi nơi hiển thị.
 final moviesProvider = StreamProvider<List<Movie>>((ref) {
   return FirebaseFirestore.instance
       .collection('movies')
       .snapshots()
-      .map((snap) => snap.docs.map((d) => Movie.fromDoc(d)).toList());
+      .map((snap) => snap.docs.map((d) => Movie.fromDoc(d)).where((m) => !m.isDeleted).toList());
 });
 
 final nowShowingProvider = Provider<List<Movie>>((ref) {

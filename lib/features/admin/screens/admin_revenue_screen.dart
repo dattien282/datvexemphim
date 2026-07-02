@@ -1,31 +1,32 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:excel/excel.dart' as xls;
+import 'package:share_plus/share_plus.dart';
+import 'package:path_provider/path_provider.dart';
+import '../../../providers/theaters_provider.dart';
 
-class AdminRevenueScreen extends StatefulWidget {
+class AdminRevenueScreen extends ConsumerStatefulWidget {
   const AdminRevenueScreen({super.key});
 
   @override
-  State<AdminRevenueScreen> createState() => _AdminRevenueScreenState();
+  ConsumerState<AdminRevenueScreen> createState() => _AdminRevenueScreenState();
 }
 
-class _AdminRevenueScreenState extends State<AdminRevenueScreen> {
+class _AdminRevenueScreenState extends ConsumerState<AdminRevenueScreen> {
   DateTime _from = DateTime.now().subtract(const Duration(days: 30));
   DateTime _to = DateTime.now();
   String? _theaterFilter;
 
-  static const _theaters = [
-    'Stella Cinema – Hồ Chí Minh',
-    'Stella Cinema – Hà Nội',
-    'Stella Cinema – Đà Nẵng',
-    'Stella Cinema – Cần Thơ',
-    'Stella Cinema – Hải Phòng',
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final theaterNames = ref.watch(theaterNamesProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -76,7 +77,7 @@ class _AdminRevenueScreenState extends State<AdminRevenueScreen> {
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                   items: [
                     const DropdownMenuItem<String?>(value: null, child: Text('Tất cả rạp', style: TextStyle(color: Colors.white54))),
-                    ..._theaters.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t))),
+                    ...theaterNames.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t))),
                   ],
                   onChanged: (v) => setState(() => _theaterFilter = v),
                 ),
@@ -158,33 +159,39 @@ class _ReportBody extends StatelessWidget {
   Widget build(BuildContext context) {
     Query query = FirebaseFirestore.instance
         .collection('tickets')
-        .where('payment_status', isEqualTo: 'COMPLETED')
-        .where('created_at', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
-        .where('created_at', isLessThanOrEqualTo: Timestamp.fromDate(to.add(const Duration(days: 1))));
+        .where('paymentStatus', whereIn: ['COMPLETED', 'CHECKED_IN'])
+        .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(from))
+        .where('createdAt', isLessThanOrEqualTo: Timestamp.fromDate(to.add(const Duration(days: 1))));
 
     if (theater != null) {
-      query = query.where('theater', isEqualTo: theater);
+      query = query.where('theaterName', isEqualTo: theater);
     }
 
     return StreamBuilder<QuerySnapshot>(
-      stream: query.orderBy('created_at', descending: true).snapshots(),
+      stream: query.orderBy('createdAt', descending: true).snapshots(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator(color: Colors.green));
         }
         final docs = snap.data?.docs ?? [];
-        final revenue = docs.fold<int>(0, (s, d) => s + ((d.data() as Map)['totalPrice'] as num? ?? 0).toInt());
+        final revenue = docs.fold<int>(0, (s, d) => s + ((d.data() as Map)['totalAmount'] as num? ?? 0).toInt());
         final tickets = docs.length;
         final avgOrder = tickets > 0 ? revenue ~/ tickets : 0;
 
         // Count by movie
         final Map<String, int> byMovie = {};
+        // Count by theater (chỉ có ý nghĩa khi không lọc theo 1 rạp cụ thể)
+        final Map<String, int> byTheater = {};
         for (final d in docs) {
           final data = d.data() as Map<String, dynamic>;
-          final title = data['title'] ?? '—';
-          byMovie[title] = (byMovie[title] ?? 0) + ((data['totalPrice'] as num?)?.toInt() ?? 0);
+          final title = data['movieTitle'] ?? '—';
+          byMovie[title] = (byMovie[title] ?? 0) + ((data['totalAmount'] as num?)?.toInt() ?? 0);
+          final theaterName = data['theaterName'] ?? '—';
+          byTheater[theaterName] = (byTheater[theaterName] ?? 0) + ((data['totalAmount'] as num?)?.toInt() ?? 0);
         }
         final topMovies = byMovie.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        final topTheaters = byTheater.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
         return SingleChildScrollView(
@@ -201,7 +208,89 @@ class _ReportBody extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               _card('Trung bình/đơn', '${_fmt(avgOrder)} đ', Icons.analytics_rounded, Colors.blue),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: docs.isEmpty
+                          ? null
+                          : () => _exportPdf(context, revenue: revenue, tickets: tickets, avgOrder: avgOrder, topMovies: topMovies, topTheaters: topTheaters, docs: docs),
+                      icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.redAccent, size: 16),
+                      label: const Text('Xuất PDF', style: TextStyle(color: Colors.redAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.redAccent)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: docs.isEmpty
+                          ? null
+                          : () => _exportExcel(context, revenue: revenue, tickets: tickets, avgOrder: avgOrder, topMovies: topMovies, topTheaters: topTheaters, docs: docs),
+                      icon: const Icon(Icons.grid_on_rounded, color: Colors.greenAccent, size: 16),
+                      label: const Text('Xuất Excel', style: TextStyle(color: Colors.greenAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+                      style: OutlinedButton.styleFrom(side: const BorderSide(color: Colors.greenAccent)),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 20),
+
+              // Revenue by theater (ẩn khi đã lọc theo 1 rạp cụ thể - vô nghĩa)
+              if (theater == null && topTheaters.length > 1) ...[
+                _sectionTitle('DOANH THU THEO RẠP'),
+                const SizedBox(height: 10),
+                ...topTheaters.map((entry) {
+                  final pct = revenue > 0 ? entry.value / revenue : 0.0;
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF16161F),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.location_city_rounded, color: Colors.blueAccent, size: 14),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: Text(entry.key,
+                                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                        overflow: TextOverflow.ellipsis),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Text('${_fmt(entry.value)} đ',
+                                style: const TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: pct,
+                            backgroundColor: Colors.white12,
+                            valueColor: const AlwaysStoppedAnimation(Colors.blueAccent),
+                            minHeight: 6,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text('${(pct * 100).toStringAsFixed(1)}% tổng doanh thu',
+                            style: const TextStyle(color: Colors.white38, fontSize: 10)),
+                      ],
+                    ),
+                  );
+                }),
+                const SizedBox(height: 20),
+              ],
 
               // Top movies by revenue
               if (topMovies.isNotEmpty) ...[
@@ -257,8 +346,8 @@ class _ReportBody extends StatelessWidget {
               ...docs.take(10).map((doc) {
                 final d = doc.data() as Map<String, dynamic>;
                 DateTime? ts;
-                if (d['created_at'] != null) {
-                  ts = (d['created_at'] as Timestamp).toDate();
+                if (d['createdAt'] != null) {
+                  ts = (d['createdAt'] as Timestamp).toDate();
                 }
                 return Container(
                   margin: const EdgeInsets.only(bottom: 8),
@@ -275,7 +364,7 @@ class _ReportBody extends StatelessWidget {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(d['title'] ?? '—',
+                            Text(d['movieTitle'] ?? '—',
                                 style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
                             Text(d['email'] ?? '—', style: const TextStyle(color: Colors.white38, fontSize: 10)),
                             if (ts != null)
@@ -284,7 +373,7 @@ class _ReportBody extends StatelessWidget {
                           ],
                         ),
                       ),
-                      Text('${_fmt((d['totalPrice'] as num? ?? 0).toInt())} đ',
+                      Text('${_fmt((d['totalAmount'] as num? ?? 0).toInt())} đ',
                           style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
                     ],
                   ),
@@ -335,4 +424,142 @@ class _ReportBody extends StatelessWidget {
 
   static String _fmt(int v) =>
       v.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.');
+
+  String get _rangeLabel =>
+      '${DateFormat('dd/MM/yyyy').format(from)} - ${DateFormat('dd/MM/yyyy').format(to)}${theater != null ? ' • $theater' : ''}';
+
+  Future<void> _exportPdf(
+    BuildContext context, {
+    required int revenue,
+    required int tickets,
+    required int avgOrder,
+    required List<MapEntry<String, int>> topMovies,
+    required List<MapEntry<String, int>> topTheaters,
+    required List<QueryDocumentSnapshot> docs,
+  }) async {
+    try {
+      final doc = pw.Document();
+      doc.addPage(
+        pw.MultiPage(
+          build: (ctx) => [
+            pw.Header(level: 0, text: 'BAO CAO DOANH THU - STELLA CINEMA'),
+            pw.Text('Khoang thoi gian: $_rangeLabel'),
+            pw.SizedBox(height: 12),
+            pw.Text('Tong doanh thu: ${_fmt(revenue)} d', style: pw.TextStyle(fontWeight: pw.FontWeight.bold)),
+            pw.Text('Ve ban duoc: $tickets'),
+            pw.Text('Trung binh/don: ${_fmt(avgOrder)} d'),
+            pw.SizedBox(height: 16),
+            if (topTheaters.length > 1) ...[
+              pw.Header(level: 1, text: 'Doanh thu theo rap'),
+              pw.TableHelper.fromTextArray(
+                headers: ['Rap', 'Doanh thu (d)'],
+                data: topTheaters.map((e) => [e.key, _fmt(e.value)]).toList(),
+              ),
+              pw.SizedBox(height: 16),
+            ],
+            pw.Header(level: 1, text: 'Phim doanh thu cao nhat'),
+            pw.TableHelper.fromTextArray(
+              headers: ['Phim', 'Doanh thu (d)'],
+              data: topMovies.take(10).map((e) => [e.key, _fmt(e.value)]).toList(),
+            ),
+            pw.SizedBox(height: 16),
+            pw.Header(level: 1, text: 'Giao dich (${docs.length})'),
+            pw.TableHelper.fromTextArray(
+              headers: ['Phim', 'Email', 'Ngay', 'So tien (d)'],
+              data: docs.map((d) {
+                final data = d.data() as Map<String, dynamic>;
+                final ts = data['createdAt'] != null ? (data['createdAt'] as Timestamp).toDate() : null;
+                return [
+                  data['movieTitle'] ?? '-',
+                  data['email'] ?? '-',
+                  ts != null ? DateFormat('dd/MM/yyyy HH:mm').format(ts) : '-',
+                  _fmt((data['totalAmount'] as num? ?? 0).toInt()),
+                ];
+              }).toList(),
+            ),
+          ],
+        ),
+      );
+      await Printing.sharePdf(bytes: await doc.save(), filename: 'bao_cao_doanh_thu.pdf');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi xuất PDF: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportExcel(
+    BuildContext context, {
+    required int revenue,
+    required int tickets,
+    required int avgOrder,
+    required List<MapEntry<String, int>> topMovies,
+    required List<MapEntry<String, int>> topTheaters,
+    required List<QueryDocumentSnapshot> docs,
+  }) async {
+    try {
+      final wb = xls.Excel.createExcel();
+      final defaultSheetName = wb.getDefaultSheet();
+      final sheet = wb['Doanh thu'];
+      if (defaultSheetName != null && defaultSheetName != 'Doanh thu') {
+        wb.delete(defaultSheetName);
+      }
+
+      void addRow(List<dynamic> cells) {
+        sheet.appendRow(cells.map((c) => xls.TextCellValue(c.toString())).toList());
+      }
+
+      addRow(['BÁO CÁO DOANH THU - STELLA CINEMA']);
+      addRow(['Khoảng thời gian', _rangeLabel]);
+      addRow(['Tổng doanh thu (đ)', _fmt(revenue)]);
+      addRow(['Vé bán được', tickets]);
+      addRow(['Trung bình/đơn (đ)', _fmt(avgOrder)]);
+      addRow([]);
+
+      if (topTheaters.length > 1) {
+        addRow(['DOANH THU THEO RẠP']);
+        addRow(['Rạp', 'Doanh thu (đ)']);
+        for (final e in topTheaters) {
+          addRow([e.key, e.value]);
+        }
+        addRow([]);
+      }
+
+      addRow(['PHIM DOANH THU CAO NHẤT']);
+      addRow(['Phim', 'Doanh thu (đ)']);
+      for (final e in topMovies) {
+        addRow([e.key, e.value]);
+      }
+      addRow([]);
+
+      addRow(['GIAO DỊCH']);
+      addRow(['Phim', 'Email', 'Ngày', 'Số tiền (đ)']);
+      for (final d in docs) {
+        final data = d.data() as Map<String, dynamic>;
+        final ts = data['createdAt'] != null ? (data['createdAt'] as Timestamp).toDate() : null;
+        addRow([
+          data['movieTitle'] ?? '—',
+          data['email'] ?? '—',
+          ts != null ? DateFormat('dd/MM/yyyy HH:mm').format(ts) : '—',
+          (data['totalAmount'] as num? ?? 0).toInt(),
+        ]);
+      }
+
+      final bytes = wb.encode();
+      if (bytes == null) throw Exception('Không tạo được file Excel');
+
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/bao_cao_doanh_thu.xlsx');
+      await file.writeAsBytes(bytes);
+      await Share.shareXFiles([XFile(file.path)], text: 'Báo cáo doanh thu Stella Cinema');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi xuất Excel: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
 }

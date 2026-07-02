@@ -1,16 +1,22 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:intl/intl.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:add_2_calendar/add_2_calendar.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/constants.dart';
+import '../viewmodels/ticket_viewmodel.dart';
 
-class MyTicketsScreen extends StatefulWidget {
+class MyTicketsScreen extends ConsumerStatefulWidget {
   const MyTicketsScreen({super.key});
 
   @override
-  State<MyTicketsScreen> createState() => _MyTicketsScreenState();
+  ConsumerState<MyTicketsScreen> createState() => _MyTicketsScreenState();
 }
 
-class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProviderStateMixin {
+class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
   @override
@@ -25,328 +31,404 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
     super.dispose();
   }
 
+  // Hủy vé giờ đi qua backend /cancel-ticket (Admin SDK, 1 transaction duy
+  // nhất cho cả hoàn ví + đổi trạng thái vé) thay vì 3 lệnh ghi Firestore rời
+  // rạc như trước - tránh trường hợp ví đã được hoàn tiền nhưng bước đổi
+  // trạng thái vé bị Firestore rules từ chối (vé COMPLETED), khiến vé vẫn
+  // còn hiệu lực trong khi khách đã nhận lại tiền, và có thể lặp lại nhiều
+  // lần vì nút hủy không có trạng thái "đang xử lý" để chặn double-tap.
   void _showCancelTicketDialog(BuildContext context, String ticketId, String title) {
     showDialog(
       context: context,
       builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          backgroundColor: const Color(0xFF16161F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 22),
-              SizedBox(width: 8),
-              Text('XÁC NHẬN HỦY VÉ', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+        bool isCancelling = false;
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            backgroundColor: const Color(0xFF0A0A0A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 22),
+                SizedBox(width: 8),
+                Text('XÁC NHẬN HỦY VÉ', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+              ],
+            ),
+            content: Text(
+              'Bạn có chắc chắn muốn hủy vé bộ phim "$title" không? Chỉ áp dụng cho vé còn tối thiểu 30 phút trước giờ chiếu. Hệ thống sẽ tự động hoàn tiền và gửi thông báo xác nhận về hộp thư của bạn.',
+              style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isCancelling ? null : () => Navigator.pop(dialogContext),
+                child: const Text('QUAY LẠI', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+              ElevatedButton(
+                onPressed: isCancelling
+                    ? null
+                    : () async {
+                        setDialogState(() => isCancelling = true);
+                        final navigator = Navigator.of(dialogContext);
+                        final messenger = ScaffoldMessenger.of(context);
+                        try {
+                          final idToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+                          final response = await http.post(
+                            Uri.parse('${AppConfig.paymentBackendUrl}/cancel-ticket'),
+                            headers: {
+                              'Content-Type': 'application/json',
+                              if (idToken != null) 'Authorization': 'Bearer $idToken',
+                            },
+                            body: jsonEncode({'ticketId': ticketId}),
+                          ).timeout(const Duration(seconds: 15));
+
+                          final body = jsonDecode(response.body) as Map<String, dynamic>;
+                          final ok = body['success'] == true;
+                          navigator.pop();
+                          messenger.showSnackBar(
+                            SnackBar(
+                              content: Text(ok
+                                  ? 'Đã hủy vé và hoàn tiền thành công! Vui lòng kiểm tra Ví & Thông báo. 🎉'
+                                  : (body['message'] ?? 'Hủy vé thất bại')),
+                              backgroundColor: ok ? Colors.teal : Colors.redAccent,
+                            ),
+                          );
+                        } catch (e) {
+                          navigator.pop();
+                          messenger.showSnackBar(
+                            SnackBar(content: Text('Lỗi kết nối máy chủ khi hủy vé: $e'), backgroundColor: Colors.redAccent),
+                          );
+                        }
+                      },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  disabledBackgroundColor: Colors.redAccent.withValues(alpha: 0.4),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                child: isCancelling
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text('XÁC NHẬN HỦY', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
             ],
           ),
-          content: Text(
-            'Bạn có chắc chắn muốn hủy vé bộ phim "$title" không? Hệ thống sẽ tự động hoàn tiền và gửi thông báo xác nhận về hộp thư của bạn.',
-            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('QUAY LẠI', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                Navigator.pop(dialogContext);
-
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Đang xử lý hoàn vé và cập nhật hệ thống thông báo...')),
-                );
-
-                try {
-                  // Ghi thông báo hủy vé vào collection 'notifications'
-                  final userEmail = FirebaseAuth.instance.currentUser?.email ?? '';
-                  await FirebaseFirestore.instance.collection('notifications').add({
-                    'title': 'HỦY VÉ HOÀN TIỀN THÀNH CÔNG 💸',
-                    'body': 'Stella Cinema xác nhận yêu cầu hủy vé phim "$title" đã được phê duyệt. Số tiền hoàn lại đã được gửi về ví của bạn.',
-                    'userEmail': userEmail,
-                    'type': 'system',
-                    'isRead': false,
-                    'createdAt': Timestamp.now(),
-                  });
-
-                  // 2. Chuyển trạng thái vé thành CANCELLED thay vì xóa hẳn (lịch sử vé)
-                  await FirebaseFirestore.instance.collection('tickets').doc(ticketId).update({
-                    'payment_status': 'CANCELLED',
-                  });
-
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Đã hủy vé thành công! Vui lòng kiểm tra Trung tâm thông báo. 🎉')),
-                  );
-                } catch (e) {
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Lỗi hệ thống khi hủy vé: $e')),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              child: const Text('XÁC NHẬN HỦY', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-            ),
-          ],
         );
       },
     );
   }
 
-  void _simulateSaveToCalendar(BuildContext context, String movieTitle, String showtime) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(color: Colors.amber),
-            SizedBox(height: 16),
-            Text('Đang đồng bộ với lịch hệ thống...', style: TextStyle(color: Colors.white70, fontSize: 13, decoration: TextDecoration.none)),
-          ],
-        ),
-      ),
-    );
-
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      Navigator.pop(context); 
-
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            backgroundColor: const Color(0xFF16161F),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            title: const Row(
-              children: [
-                Icon(Icons.calendar_today_rounded, color: Colors.amber, size: 22),
-                SizedBox(width: 10),
-                Text('ĐÃ THÊM VÀO LỊCH 📅', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
-              ],
-            ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Sự kiện xem phim đã được đồng bộ hóa thành công vào ứng dụng Lịch của thiết bị:', style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.4)),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E1E2A),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        '🎬 Sự kiện: Xem phim "$movieTitle"',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '📅 Lịch chiếu: $showtime',
-                        style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.w500),
-                      ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        '📍 Địa điểm: Stella Cinema (Vui lòng đến trước 15 phút)',
-                        style: TextStyle(color: Colors.white54, fontSize: 11),
-                      ),
-                    ],
-                  ),
-                )
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('ĐÃ HIỂU', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
-              )
-            ],
-          );
-        },
-      );
-    });
+  // Parse "yyyy-MM-dd" (showtime thật do theater_manager tạo) hoặc
+  // "Hôm nay (dd/MM)"/"Thứ X (dd/MM)" (khung giờ mẫu dự phòng) thành DateTime
+  // thật - dùng chung logic với backend-payos/server.js parseShowDateTime.
+  DateTime? _parseShowDateTime(String showDate, String showTime) {
+    try {
+      final parts = showTime.split(':');
+      final hh = int.parse(parts[0]);
+      final mm = int.parse(parts[1]);
+      final isoMatch = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(showDate);
+      if (isoMatch != null) {
+        return DateTime(int.parse(isoMatch[1]!), int.parse(isoMatch[2]!), int.parse(isoMatch[3]!), hh, mm);
+      }
+      final ddmmMatch = RegExp(r'\((\d{2})/(\d{2})\)').firstMatch(showDate);
+      if (ddmmMatch != null) {
+        final now = DateTime.now();
+        return DateTime(now.year, int.parse(ddmmMatch[2]!), int.parse(ddmmMatch[1]!), hh, mm);
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 
-  void _showTicketDetailsModal(BuildContext context, Map<String, dynamic> ticketData) {
-    final title = ticketData['title'] ?? 'Phim Stella Cinema';
+  // Ghi thật vào ứng dụng Lịch của thiết bị (mở app Calendar có sẵn để người
+  // dùng xác nhận lưu) - trước đây chỉ là hiệu ứng loading giả rồi hiện dialog
+  // "đã lưu" mà không hề đụng tới calendar thật nào trên máy.
+  void _addToDeviceCalendar(BuildContext context, String movieTitle, String showDate, String showTime, String theaterName) {
+    final start = _parseShowDateTime(showDate, showTime);
+    if (start == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Không đọc được ngày giờ suất chiếu để thêm vào lịch.'), backgroundColor: Colors.orangeAccent),
+      );
+      return;
+    }
+    final event = Event(
+      title: 'Xem phim: $movieTitle',
+      description: 'Vé xem phim tại $theaterName - Stella Cinema',
+      location: theaterName,
+      startDate: start,
+      endDate: start.add(const Duration(hours: 2)),
+      iosParams: const IOSParams(reminder: Duration(minutes: 30)),
+      androidParams: const AndroidParams(emailInvites: []),
+    );
+    Add2Calendar.addEvent2Cal(event);
+  }
+
+  void _showTicketDetailsModal(BuildContext context, String ticketId, Map<String, dynamic> ticketData) {
+    final title = ticketData['movieTitle'] ?? 'Phim Stella Cinema';
     final posterUrl = ticketData['posterUrl'] ?? '';
     final List<dynamic> seats = ticketData['seats'] ?? [];
-    final int amount = ticketData['total_amount'] ?? 0;
+    final int amount = ticketData['totalAmount'] ?? (ticketData['ticketAmount'] ?? 0);
     final formatAmount = amount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.');
-    final showtime = ticketData['showtime'] ?? 'Stella Cinema';
-    final isCancelled = ticketData['payment_status'] == 'CANCELLED';
+    final String showDate = ticketData['showDate'] ?? 'Unknown Date';
+    final String showTime = ticketData['showTime'] ?? 'Unknown Time';
+    final String theaterName = ticketData['theaterName'] ?? ticketData['selectedTheater'] ?? 'Stella Cinema';
+    final isCancelled = ticketData['paymentStatus'] == 'CANCELLED';
+    final String? qrSignature = ticketData['qrSignature'] as String?;
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF16161F),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      backgroundColor: Colors.transparent,
       builder: (context) {
         return Padding(
-          padding: const EdgeInsets.all(24.0),
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).padding.bottom + 20,
+            left: 20,
+            right: 20,
+            top: MediaQuery.of(context).padding.top + 20,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2))),
-              const SizedBox(height: 20),
-              
-              // Chi tiết vé
-              const Text(
-                'VÉ XEM PHIM ĐIỆN TỬ',
-                style: TextStyle(color: Colors.white30, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 2),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (posterUrl.isNotEmpty) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(8),
-                      child: Image.network(
-                        posterUrl,
-                        width: 55,
-                        height: 80,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Container(
-                          width: 55,
-                          height: 80,
-                          color: Colors.white12,
-                          child: const Icon(Icons.movie, color: Colors.white30, size: 24),
+              // Ticket Card
+              ClipPath(
+                clipper: TicketClipper(),
+                child: Container(
+                  color: Colors.white,
+                  width: double.infinity,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Top Section
+                      Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (posterUrl.isNotEmpty)
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.network(
+                                  posterUrl,
+                                  width: 100,
+                                  height: 140,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) => _buildPlaceholderPoster(),
+                                ),
+                              )
+                            else
+                              _buildPlaceholderPoster(),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    title,
+                                    style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 18),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.access_time_rounded, size: 16, color: Colors.black54),
+                                      const SizedBox(width: 6),
+                                      const Text('120 phút', style: TextStyle(color: Colors.black87, fontSize: 13)), // Mock duration
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.videocam_outlined, size: 16, color: Colors.black54),
+                                      const SizedBox(width: 6),
+                                      const Expanded(child: Text('Hành động, Phiêu lưu', style: TextStyle(color: Colors.black87, fontSize: 13))), // Mock genre
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            )
+                          ],
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 16),
-                  ],
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                      
+                      // Date and Seat Info
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.calendar_month_outlined, size: 36, color: Colors.black87),
+                                const SizedBox(width: 12),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(showTime, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+                                    Text(showDate, style: const TextStyle(color: Colors.black54, fontSize: 13)),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            Row(
+                              children: [
+                                const Icon(Icons.chair_alt_outlined, size: 36, color: Colors.black87),
+                                const SizedBox(width: 12),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Phòng chiếu', style: TextStyle(color: Colors.black54, fontSize: 12)),
+                                    Text(seats.join(', '), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14)),
+                                  ],
+                                ),
+                              ],
+                            )
+                          ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          showtime,
-                          style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w500, fontSize: 13),
+                      ),
+                      
+                      const SizedBox(height: 20),
+                      // Dashed Divider
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                        child: CustomPaint(
+                          painter: DashedLinePainter(),
+                          child: const SizedBox(width: double.infinity, height: 1),
                         ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const Divider(color: Colors.white12, height: 30),
+                      ),
+                      const SizedBox(height: 20),
 
-              // Mock QR Code & Barcode
-              if (isCancelled)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  decoration: BoxDecoration(color: Colors.redAccent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(12)),
-                  child: const Text('VÉ NÀY ĐÃ BỊ HỦY / HOÀN TIỀN', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13)),
-                )
-              else ...[
-                const MockQRCodeWidget(),
-                const SizedBox(height: 12),
-                const BarcodeWidget(),
-                const SizedBox(height: 8),
-                const Text('MÃ VÉ: STL-8392-749', style: TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold)),
-              ],
-              
-              const Divider(color: Colors.white12, height: 30),
-              
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Ghế đã đặt:', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                  Text(seats.join(', '), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                ],
+                      // Location & Price
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.monetization_on_outlined, size: 20, color: Colors.black87),
+                                const SizedBox(width: 12),
+                                Text('$formatAmount VND', style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.location_on_outlined, size: 20, color: Colors.black87),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(theaterName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
+                                      const SizedBox(height: 4),
+                                      const Text('Please arrive 15 minutes early.', style: TextStyle(color: Colors.black54, fontSize: 13)),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // QR Code Section
+                      const SizedBox(height: 16),
+                      if (isCancelled)
+                        Center(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                            decoration: BoxDecoration(color: Colors.redAccent.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
+                            child: const Text('VÉ NÀY ĐÃ BỊ HỦY', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+                          ),
+                        )
+                      else if (qrSignature != null)
+                        Center(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.only(left: 20, right: 10),
+                                  child: Text('Xuất trình mã QR này tại quầy vé để nhận vé', style: TextStyle(color: Colors.black87, fontSize: 13)),
+                                )
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(right: 20),
+                                child: QrImageView(
+                                  data: jsonEncode({'ticketId': ticketId, 'signature': qrSignature}),
+                                  version: QrVersions.auto,
+                                  size: 90,
+                                  backgroundColor: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      
+                      // Bottom Section (Barcode)
+                      const SizedBox(height: 30),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: const BarcodeWidget(color: Colors.black), // Passed color
+                      ),
+                      const SizedBox(height: 12),
+                      Center(
+                        child: Text('Order ID: ${ticketId.toUpperCase()}', style: const TextStyle(color: Colors.black87, fontSize: 12)),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                  ),
+                ),
               ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Tổng thanh toán:', style: TextStyle(color: Colors.grey, fontSize: 12)),
-                  Text('$formatAmount đ', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15)),
-                ],
-              ),
-              const SizedBox(height: 30),
               
-              if (!isCancelled) ...[
-                SizedBox(
-                  width: double.infinity,
-                  height: 44,
-                  child: ElevatedButton.icon(
-                    onPressed: () => _simulateSaveToCalendar(context, title, showtime),
-                    icon: const Icon(Icons.calendar_today_rounded, color: Colors.black, size: 16),
-                    label: const Text('THÊM VÀO LỊCH CHIẾU HỆ THỐNG', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.amber,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      elevation: 0,
+              const SizedBox(height: 16),
+              if (!isCancelled)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: OutlinedButton.icon(
+                    onPressed: () => _addToDeviceCalendar(context, title, showDate, showTime, theaterName),
+                    icon: const Icon(Icons.calendar_month_rounded, color: Colors.amber, size: 18),
+                    label: const Text('Lưu vào lịch', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.amber),
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
                     ),
                   ),
                 ),
-                const SizedBox(height: 16),
-              ],
-
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: isCancelled ? null : () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Đang tạo ảnh vé... Đã lưu ảnh thành công vào Album của bạn! 📸'), backgroundColor: Colors.green),
-                        );
-                      },
-                      icon: const Icon(Icons.share_rounded, size: 18),
-                      label: const Text('CHIA SẺ VÉ'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: Colors.white70,
-                        side: const BorderSide(color: Colors.white24),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.amber,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        elevation: 0,
-                      ),
-                      child: const Text('ĐÓNG', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
+              // Close button
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  shape: const CircleBorder(),
+                  padding: const EdgeInsets.all(16),
+                ),
+                child: const Icon(Icons.close),
               )
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildPlaceholderPoster() {
+    return Container(
+      width: 100,
+      height: 140,
+      decoration: BoxDecoration(color: Colors.grey.shade300, borderRadius: BorderRadius.circular(12)),
+      child: const Icon(Icons.movie, color: Colors.grey, size: 40),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         centerTitle: true,
         title: const Text('KHO VÉ CỦA TÔI', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 0.5)),
@@ -366,15 +448,8 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
           ],
         ),
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('tickets').orderBy('created_at', descending: true).snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.amber));
-          }
-
-          final List<QueryDocumentSnapshot> allTickets = snapshot.hasData ? snapshot.data!.docs : [];
-
+      body: ref.watch(userTicketsProvider).when(
+        data: (allTickets) {
           return TabBarView(
             controller: _tabController,
             children: [
@@ -383,6 +458,10 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
             ],
           );
         },
+        loading: () => const Center(child: CircularProgressIndicator(color: Colors.amber)),
+        error: (error, stackTrace) => Center(
+          child: Text('Đã xảy ra lỗi: $error', style: const TextStyle(color: Colors.redAccent)),
+        ),
       ),
     );
   }
@@ -391,7 +470,7 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
     // Phân loại: Vé sắp xem có payment_status == 'COMPLETED'. Lịch sử có status == 'CANCELLED' hoặc vé cũ
     final filteredTickets = allTickets.where((doc) {
       final data = doc.data() as Map<String, dynamic>;
-      final status = data['payment_status'] ?? 'COMPLETED';
+      final status = data['paymentStatus'] ?? 'COMPLETED';
       return activeOnly ? (status == 'COMPLETED') : (status == 'CANCELLED');
     }).toList();
 
@@ -419,12 +498,12 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
         final ticketData = ticketDoc.data() as Map<String, dynamic>;
 
         final String ticketId = ticketDoc.id;
-        final String title = ticketData['title'] ?? 'Phim Stella Cinema';
+        final String title = ticketData['movieTitle'] ?? 'Phim Stella Cinema';
         final String posterUrl = ticketData['posterUrl'] ?? '';
         final List<dynamic> seats = ticketData['seats'] ?? [];
-        final int amount = ticketData['total_amount'] ?? 0;
+        final int amount = ticketData['totalAmount'] ?? 0;
         final formatAmount = amount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.');
-        final isCancelled = ticketData['payment_status'] == 'CANCELLED';
+        final isCancelled = ticketData['paymentStatus'] == 'CANCELLED';
 
         return TweenAnimationBuilder<double>(
           tween: Tween<double>(begin: 0.0, end: 1.0),
@@ -438,67 +517,100 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
           child: Container(
             margin: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
-              color: const Color(0xFF16161F),
+              color: const Color(0xFF1E1E2C),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: isCancelled ? Colors.redAccent.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.05),
-              ),
+              boxShadow: [
+                BoxShadow(
+                  color: isCancelled ? Colors.redAccent.withValues(alpha: 0.1) : Colors.amber.withValues(alpha: 0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
             ),
-            child: InkWell(
-              onTap: () => _showTicketDetailsModal(context, ticketData),
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(16),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: const BorderRadius.only(topLeft: Radius.circular(16)),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _showTicketDetailsModal(context, ticketId, ticketData),
+                  child: SizedBox(
+                    height: 140,
+                    child: Row(
+                      children: [
+                      // Image Section
+                      SizedBox(
+                        width: 100,
+                        height: 140,
                         child: posterUrl.isNotEmpty
-                            ? Image.network(posterUrl, width: 85, height: 115, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(width: 85, height: 115, color: const Color(0xFF222232), child: const Icon(Icons.movie, color: Colors.white24)))
-                            : Container(width: 85, height: 115, color: const Color(0xFF222232), child: const Icon(Icons.movie, color: Colors.white24)),
+                            ? Image.network(posterUrl, fit: BoxFit.cover, errorBuilder: (c, e, s) => Container(color: const Color(0xFF222232), child: const Icon(Icons.movie, color: Colors.white24)))
+                            : Container(color: const Color(0xFF222232), child: const Icon(Icons.movie, color: Colors.white24)),
                       ),
+                      // Dashed Divider
+                      Container(
+                        width: 1,
+                        height: 140,
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: CustomPaint(
+                          painter: DashedLineVerticalPainter(),
+                        ),
+                      ),
+                      // Details Section
                       Expanded(
                         child: Padding(
-                          padding: const EdgeInsets.all(12.0),
+                          padding: const EdgeInsets.all(16.0),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                              const SizedBox(height: 6),
-                              Text('Ghế ngồi: ${seats.join(", ")}', style: TextStyle(color: isCancelled ? Colors.redAccent : Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-                              const SizedBox(height: 6),
-                              Text('Tổng tiền: $formatAmount đ', style: const TextStyle(color: Colors.white70, fontSize: 11)),
+                              Text(title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Icon(Icons.chair_alt_rounded, size: 14, color: isCancelled ? Colors.redAccent : Colors.amber),
+                                  const SizedBox(width: 4),
+                                  Expanded(child: Text(seats.join(", "), style: TextStyle(color: isCancelled ? Colors.redAccent : Colors.amber, fontWeight: FontWeight.w600, fontSize: 13), overflow: TextOverflow.ellipsis)),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Row(
+                                children: [
+                                  const Icon(Icons.monetization_on_outlined, size: 14, color: Colors.white54),
+                                  const SizedBox(width: 4),
+                                  Text('$formatAmount đ', style: const TextStyle(color: Colors.white70, fontSize: 13)),
+                                ],
+                              ),
+                              const Spacer(),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    isCancelled ? '❌ ĐÃ HỦY' : '🎟️ NHẤN ĐỂ XEM',
+                                    style: TextStyle(
+                                      color: isCancelled ? Colors.redAccent : Colors.white54,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0.5,
+                                    ),
+                                  ),
+                                  if (!isCancelled)
+                                    InkWell(
+                                      onTap: () => _showCancelTicketDialog(context, ticketId, title),
+                                      borderRadius: BorderRadius.circular(4),
+                                      child: const Padding(
+                                        padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                        child: Text('HỦY', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ],
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: const BoxDecoration(color: Color(0xFF1E1E2A), borderRadius: BorderRadius.vertical(bottom: Radius.circular(16))),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          isCancelled ? '❌ GIAO DỊCH ĐÃ HỦY' : '🎟️ Chạm để xem QR vào rạp',
-                          style: TextStyle(
-                            color: isCancelled ? Colors.redAccent : Colors.white38,
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        if (!isCancelled)
-                          TextButton.icon(
-                            onPressed: () => _showCancelTicketDialog(context, ticketId, title),
-                            icon: const Icon(Icons.cancel_presentation_rounded, color: Colors.redAccent, size: 16),
-                            label: const Text('HỦY VÉ', style: TextStyle(color: Colors.redAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                            style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-                          ),
                       ],
                     ),
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -509,7 +621,8 @@ class _MyTicketsScreenState extends State<MyTicketsScreen> with SingleTickerProv
 }
 
 class BarcodeWidget extends StatelessWidget {
-  const BarcodeWidget({super.key});
+  final Color color;
+  const BarcodeWidget({super.key, this.color = Colors.white70});
 
   @override
   Widget build(BuildContext context) {
@@ -521,50 +634,94 @@ class BarcodeWidget extends StatelessWidget {
         return Container(
           width: width,
           height: 40,
-          color: isSpace ? Colors.transparent : Colors.white70,
+          color: isSpace ? Colors.transparent : color,
         );
       }),
     );
   }
 }
 
-class MockQRCodeWidget extends StatelessWidget {
-  const MockQRCodeWidget({super.key});
+class DashedLineVerticalPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    var paint = Paint()
+      ..color = Colors.white24
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    
+    var max = size.height;
+    var dashWidth = 5.0;
+    var dashSpace = 5.0;
+    double startY = 0;
+    
+    while (startY < max) {
+      canvas.drawLine(Offset(0, startY), Offset(0, startY + dashWidth), paint);
+      startY += dashWidth + dashSpace;
+    }
+  }
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 130,
-      height: 130,
-      color: Colors.white,
-      padding: const EdgeInsets.all(8),
-      child: GridView.builder(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 15,
-        ),
-        itemCount: 15 * 15,
-        itemBuilder: (context, index) {
-          final x = index % 15;
-          final y = index ~/ 15;
-          bool isBlack = false;
-
-          if (x < 4 && y < 4) {
-            isBlack = (x == 0 || x == 3 || y == 0 || y == 3);
-          } else if (x >= 11 && y < 4) {
-            isBlack = (x == 11 || x == 14 || y == 0 || y == 3);
-          } else if (x < 4 && y >= 11) {
-            isBlack = (x == 0 || x == 3 || y == 11 || y == 14);
-          } else {
-            isBlack = (index * 7 + index % 3) % 2 == 0;
-          }
-
-          return Container(
-            color: isBlack ? const Color(0xFF0F0F13) : Colors.white,
-          );
-        },
-      ),
-    );
-  }
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
 }
+
+class TicketClipper extends CustomClipper<Path> {
+  final double holeRadius = 16.0;
+  final double cornerRadius = 16.0;
+  
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    final double holeY = size.height * 0.65;
+
+    path.moveTo(cornerRadius, 0);
+    path.lineTo(size.width - cornerRadius, 0);
+    path.quadraticBezierTo(size.width, 0, size.width, cornerRadius);
+    path.lineTo(size.width, holeY - holeRadius);
+    path.arcToPoint(
+      Offset(size.width, holeY + holeRadius),
+      radius: Radius.circular(holeRadius),
+      clockwise: false,
+    );
+    path.lineTo(size.width, size.height - cornerRadius);
+    path.quadraticBezierTo(size.width, size.height, size.width - cornerRadius, size.height);
+    path.lineTo(cornerRadius, size.height);
+    path.quadraticBezierTo(0, size.height, 0, size.height - cornerRadius);
+    path.lineTo(0, holeY + holeRadius);
+    path.arcToPoint(
+      Offset(0, holeY - holeRadius),
+      radius: Radius.circular(holeRadius),
+      clockwise: false,
+    );
+    path.lineTo(0, cornerRadius);
+    path.quadraticBezierTo(0, 0, cornerRadius, 0);
+    
+    path.close();
+    return path;
+  }
+
+  @override
+  bool shouldReclip(CustomClipper<Path> oldClipper) => false;
+}
+
+class DashedLinePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Paint paint = Paint()
+      ..color = Colors.grey.shade400
+      ..strokeWidth = 1.5
+      ..style = PaintingStyle.stroke;
+
+    const double dashWidth = 6.0;
+    const double dashSpace = 4.0;
+    double startX = 0;
+
+    while (startX < size.width) {
+      canvas.drawLine(Offset(startX, 0), Offset(startX + dashWidth, 0), paint);
+      startX += dashWidth + dashSpace;
+    }
+  }
+
+  @override
+  bool shouldRepaint(CustomPainter oldDelegate) => false;
+}
+

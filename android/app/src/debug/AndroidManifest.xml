@@ -4,4 +4,9 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- Cho phép HTTP thường (cleartext) tới backend PayOS chạy local khi
+         dev/debug - xem network_security_config.xml cùng thư mục. Chỉ áp
+         dụng cho build debug, không lọt vào bản release. -->
+    <application android:networkSecurityConfig="@xml/network_security_config" />
 </manifest>

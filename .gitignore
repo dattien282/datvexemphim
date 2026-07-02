@@ -68,3 +68,8 @@ android/app/google-services.json
 # Private key files
 firebase-key.json.json
 *.json.json
+
+# Backend-payos secrets (never commit real PayOS/Firebase credentials)
+backend-payos/.env
+backend-payos/serviceAccountKey.json
+backend-payos/node_modules/

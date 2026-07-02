@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../providers/movies_provider.dart';
+import 'admin_audit_log.dart';
 
 class AdminMoviesScreen extends ConsumerWidget {
   const AdminMoviesScreen({super.key});
@@ -11,7 +12,7 @@ class AdminMoviesScreen extends ConsumerWidget {
     final moviesAsync = ref.watch(moviesProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -59,6 +60,7 @@ class AdminMoviesScreen extends ConsumerWidget {
     final durationCtrl = TextEditingController(text: existing?.duration ?? '');
     final releaseDateCtrl = TextEditingController(text: existing?.releaseDate ?? '');
     final descCtrl = TextEditingController(text: existing?.description ?? '');
+    final trailerCtrl = TextEditingController(text: existing?.trailerUrl ?? '');
     bool isShowingNow = existing?.isShowingNow ?? true;
 
     showDialog(
@@ -86,6 +88,7 @@ class AdminMoviesScreen extends ConsumerWidget {
                   _field(durationCtrl, 'Thời lượng (vd: 130 phút)'),
                   _field(releaseDateCtrl, 'Ngày khởi chiếu (vd: 10/02/2024)'),
                   _field(descCtrl, 'Nội dung phim', maxLines: 3),
+                  _field(trailerCtrl, 'URL Trailer YouTube (vd: https://youtu.be/xxxx)'),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -122,13 +125,15 @@ class AdminMoviesScreen extends ConsumerWidget {
                   'releaseDate': releaseDateCtrl.text.trim(),
                   'description': descCtrl.text.trim(),
                   'isShowingNow': isShowingNow,
-                  'trailerUrl': existing?.trailerUrl ?? '',
+                  'trailerUrl': trailerCtrl.text.trim(),
                 };
                 final col = FirebaseFirestore.instance.collection('movies');
                 if (existing == null) {
-                  await col.add(data);
+                  final ref = await col.add(data);
+                  await logAdminAction(action: 'create_movie', targetCollection: 'movies', targetId: ref.id, after: data);
                 } else {
                   await col.doc(existing.id).update(data);
+                  await logAdminAction(action: 'update_movie', targetCollection: 'movies', targetId: existing.id, before: existing.toMap(), after: data);
                 }
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
@@ -257,14 +262,20 @@ class _MovieTile extends StatelessWidget {
         backgroundColor: const Color(0xFF16161F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('XÓA PHIM', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        content: Text('Bạn có chắc muốn xóa phim "${movie.title}"?',
+        content: Text('Bạn có chắc muốn xóa phim "${movie.title}"? Vé/đánh giá cũ vẫn được giữ lại, phim chỉ bị ẩn khỏi ứng dụng.',
             style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              await FirebaseFirestore.instance.collection('movies').doc(movie.id).delete();
+              // Soft delete: giữ document lại (tránh vé/đánh giá cũ tham
+              // chiếu tới phim không còn tồn tại), chỉ ẩn khỏi mọi danh sách.
+              await FirebaseFirestore.instance.collection('movies').doc(movie.id).update({
+                'isDeleted': true,
+                'deletedAt': Timestamp.now(),
+              });
+              await logAdminAction(action: 'delete_movie', targetCollection: 'movies', targetId: movie.id, before: movie.toMap());
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             child: const Text('XÓA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),

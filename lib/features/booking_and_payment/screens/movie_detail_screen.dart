@@ -55,12 +55,19 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       );
       return;
     }
-    showDialog(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (_) => _TrailerDialog(
-        videoId: videoId,
-        title: widget.movieData['title'] ?? '',
+    Navigator.push(
+      context,
+      PageRouteBuilder(
+        opaque: true,
+        fullscreenDialog: true,
+        barrierColor: Colors.black,
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+        pageBuilder: (context, animation, secondaryAnimation) => _TrailerFullscreenPage(
+          videoId: videoId,
+          title: widget.movieData['title'] ?? '',
+        ),
       ),
     );
   }
@@ -133,7 +140,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          backgroundColor: const Color(0xFF16161F),
+          backgroundColor: const Color(0xFF0A0A0A),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Row(
             children: [
@@ -186,6 +193,9 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     final title = widget.movieData['title'] ?? 'Không có tên';
     final genre = widget.movieData['genre'] ?? 'Chưa rõ';
     final rating = widget.movieData['rating'] ?? '0.0';
+    final String ageRating = (widget.movieData['ageRating'] ?? '').toString();
+    final String country = (widget.movieData['country'] ?? '').toString();
+    final String cast = (widget.movieData['cast'] ?? '').toString();
     final posterUrl = widget.movieData['posterUrl'] ?? '';
     final description = widget.movieData['description'] ??
         'Bộ phim tâm lý kịch tính xuất sắc nhất năm, mang lại nhiều cung bậc cảm xúc cho khán giả với những cú twist bất ngờ và diễn xuất đỉnh cao của dàn diễn viên.';
@@ -198,8 +208,21 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           SliverAppBar(
             expandedHeight: 400,
             pinned: true,
-            backgroundColor: const Color(0xFF1E1E2A),
+            backgroundColor: const Color(0xFF121212),
             iconTheme: const IconThemeData(color: Colors.white),
+            leading: Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ),
+            ),
             flexibleSpace: FlexibleSpaceBar(
               background: GestureDetector(
                 onTap: () => _showTrailer(context),
@@ -254,7 +277,10 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  Row(
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -267,15 +293,71 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                           style: const TextStyle(color: Colors.blueAccent, fontSize: 13, fontWeight: FontWeight.bold),
                         ),
                       ),
-                      const SizedBox(width: 16),
-                      const Icon(Icons.star, color: Colors.amber, size: 20),
-                      const SizedBox(width: 4),
-                      Text(
-                        rating,
-                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      if (ageRating.isNotEmpty && ageRating != 'Chưa rõ')
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: _ageRatingColor(ageRating).withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: _ageRatingColor(ageRating)),
+                          ),
+                          child: Text(
+                            ageRating,
+                            style: TextStyle(color: _ageRatingColor(ageRating), fontSize: 12, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.star, color: Colors.amber, size: 20),
+                          const SizedBox(width: 4),
+                          Text(
+                            rating,
+                            style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
                       ),
                     ],
                   ),
+                  if (country.isNotEmpty || cast.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.04),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (country.isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Icon(Icons.public_rounded, color: Colors.amber, size: 16),
+                                  const SizedBox(width: 8),
+                                  const Text('Quốc gia: ', style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold)),
+                                  Expanded(child: Text(country, style: const TextStyle(color: Colors.white, fontSize: 12))),
+                                ],
+                              ),
+                            ),
+                          if (cast.isNotEmpty)
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Icon(Icons.people_alt_rounded, color: Colors.amber, size: 16),
+                                const SizedBox(width: 8),
+                                const Text('Diễn viên: ', style: TextStyle(color: Colors.white54, fontSize: 12, fontWeight: FontWeight.bold)),
+                                Expanded(child: Text(cast, style: const TextStyle(color: Colors.white, fontSize: 12))),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   const Text(
                     'Nội dung phim',
@@ -299,7 +381,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF16161F),
+                        color: const Color(0xFF0A0A0A),
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                       ),
@@ -313,7 +395,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               Row(
                                 children: [
                                   DropdownButton<double>(
-                                    dropdownColor: const Color(0xFF16161F),
+                                    dropdownColor: const Color(0xFF0A0A0A),
                                     value: _selectedRating,
                                     style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13),
                                     items: List.generate(10, (index) => (index + 1).toDouble()).map((val) {
@@ -336,7 +418,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                               hintText: 'Nhập bình luận của bạn về phim...',
                               hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
                               filled: true,
-                              fillColor: const Color(0xFF1E1E2A),
+                              fillColor: const Color(0xFF121212),
                               contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
                             ),
@@ -379,7 +461,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                         style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.5),
                       ),
                       DropdownButton<String>(
-                        dropdownColor: const Color(0xFF16161F),
+                        dropdownColor: const Color(0xFF0A0A0A),
                         value: _selectedSort,
                         style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
                         underline: const SizedBox(),
@@ -460,7 +542,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                             margin: const EdgeInsets.only(bottom: 12),
                             padding: const EdgeInsets.all(12),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF16161F),
+                              color: const Color(0xFF0A0A0A),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Row(
@@ -543,56 +625,103 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
           )
         ],
       ),
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-        decoration: BoxDecoration(
-          color: const Color(0xFF1E1E2A),
-          border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
-        ),
-        child: SafeArea(
-          child: SizedBox(
-            width: double.infinity,
-            height: 48,
-            child: ElevatedButton(
-              onPressed: () {
-                if (_checkLoginRequirement(context)) {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => ShowtimeSelectionScreen(movieData: widget.movieData),
-                    ),
-                  );
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.amber,
-                foregroundColor: Colors.black,
-                elevation: 0,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      // Phim "sắp chiếu" (isShowingNow == false) chỉ để xem thông tin, chưa
+      // mở bán vé - ẩn nút đặt vé, thay bằng nhãn trạng thái để không tạo
+      // cảm giác nút bị lỗi/không bấm được.
+      bottomNavigationBar: (widget.movieData['isShowingNow'] == false)
+          ? Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF121212),
+                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
               ),
-              child: const Text(
-                'ĐẶT VÉ NGAY',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+              child: SafeArea(
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Text(
+                      'PHIM SẮP CHIẾU - CHƯA MỞ BÁN VÉ',
+                      style: TextStyle(color: Colors.white38, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          : Container(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF121212),
+                border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.05))),
+              ),
+              child: SafeArea(
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => ShowtimeSelectionScreen(movieData: widget.movieData),
+                        ),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amber,
+                      foregroundColor: Colors.black,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text(
+                      'ĐẶT VÉ NGAY',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    ),
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      ),
     );
+  }
+
+  // Màu theo phân loại độ tuổi phim Việt Nam: P (mọi lứa tuổi) → K (dưới 13
+  // cần người lớn đi kèm) → T13/T16/T18 tăng dần mức độ hạn chế.
+  Color _ageRatingColor(String ageRating) {
+    switch (ageRating.toUpperCase()) {
+      case 'P':
+        return Colors.greenAccent;
+      case 'K':
+        return Colors.lightBlueAccent;
+      case 'T13':
+        return Colors.amber;
+      case 'T16':
+        return Colors.orangeAccent;
+      case 'T18':
+        return Colors.redAccent;
+      default:
+        return Colors.white54;
+    }
   }
 }
 
-// ── Dialog trailer YouTube (nhẹ, không navigate screen mới) ───────────────
-class _TrailerDialog extends StatefulWidget {
+// ── Trang trailer YouTube toàn màn hình (nền đen tuyền, không mờ/thấy trang
+// phía sau) ─────────────────────────────────────────────────────────────
+class _TrailerFullscreenPage extends StatefulWidget {
   final String videoId;
   final String title;
-  const _TrailerDialog({required this.videoId, required this.title});
+  const _TrailerFullscreenPage({required this.videoId, required this.title});
 
   @override
-  State<_TrailerDialog> createState() => _TrailerDialogState();
+  State<_TrailerFullscreenPage> createState() => _TrailerFullscreenPageState();
 }
 
-class _TrailerDialogState extends State<_TrailerDialog> {
+class _TrailerFullscreenPageState extends State<_TrailerFullscreenPage> {
   late YoutubePlayerController _controller;
 
   @override
@@ -603,7 +732,11 @@ class _TrailerDialogState extends State<_TrailerDialog> {
       flags: const YoutubePlayerFlags(
         autoPlay: true,
         mute: false,
-        enableCaption: false,
+        // enableCaption:false chỉ gửi gợi ý cc_load_policy=0 lên YouTube -
+        // với video nào nhà phát hành đặt phụ đề "luôn hiện" thì YouTube vẫn
+        // tự bật bất kể cờ này. Bật enableCaption để hiện nút CC, cho người
+        // xem tự tắt thủ công trong trình phát khi gặp trường hợp đó.
+        enableCaption: true,
         forceHD: false,
         hideThumbnail: true,
       ),
@@ -618,54 +751,54 @@ class _TrailerDialogState extends State<_TrailerDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
+    return Scaffold(
       backgroundColor: Colors.black,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 80),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.play_circle_rounded, color: Colors.amber, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.title.toUpperCase(),
-                    style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
-                    overflow: TextOverflow.ellipsis,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.play_circle_rounded, color: Colors.amber, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.title.toUpperCase(),
+                      style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 20),
-                  onPressed: () {
-                    _controller.pause();
-                    Navigator.pop(context);
-                  },
-                ),
-              ],
-            ),
-          ),
-          // Player
-          ClipRRect(
-            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
-            child: YoutubePlayer(
-              controller: _controller,
-              showVideoProgressIndicator: true,
-              progressIndicatorColor: Colors.amber,
-              progressColors: const ProgressBarColors(
-                playedColor: Colors.amber,
-                handleColor: Colors.amberAccent,
-                bufferedColor: Colors.white24,
-                backgroundColor: Colors.white12,
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 22),
+                    onPressed: () {
+                      _controller.pause();
+                      Navigator.pop(context);
+                    },
+                  ),
+                ],
               ),
-              onReady: () => _controller.play(),
             ),
-          ),
-        ],
+            // Player - căn giữa màn hình, chiếm trọn chiều rộng
+            Expanded(
+              child: Center(
+                child: YoutubePlayer(
+                  controller: _controller,
+                  showVideoProgressIndicator: true,
+                  progressIndicatorColor: Colors.amber,
+                  progressColors: const ProgressBarColors(
+                    playedColor: Colors.amber,
+                    handleColor: Colors.amberAccent,
+                    bufferedColor: Colors.white24,
+                    backgroundColor: Colors.white12,
+                  ),
+                  onReady: () => _controller.play(),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

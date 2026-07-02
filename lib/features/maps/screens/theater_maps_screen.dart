@@ -1,79 +1,47 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../../providers/theaters_provider.dart';
 
-class TheaterMapsScreen extends StatefulWidget {
+class TheaterMapsScreen extends ConsumerStatefulWidget {
   const TheaterMapsScreen({super.key});
 
   @override
-  State<TheaterMapsScreen> createState() => _TheaterMapsScreenState();
+  ConsumerState<TheaterMapsScreen> createState() => _TheaterMapsScreenState();
 }
 
-class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
+class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
   GoogleMapController? _mapController;
   Position? _userPosition;
   bool _isLoadingLocation = true;
   String _selectedCity = 'Tất cả';
 
-  final List<String> _cities = ['Tất cả', 'Hồ Chí Minh', 'Hà Nội', 'Đà Nẵng', 'Cần Thơ'];
-
-  // DANH SACH RAP STELLA DUOC DONG BO TOA DO THUC TE DE TEST GOOGLE MAPS
-  final List<Map<String, dynamic>> _allTheaters = [
-    {
-      'id': 'stella_nguyen_du',
-      'name': 'STELLA CINEMA NGUYỄN DU',
-      'address': 'Số 116 Nguyễn Du, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh',
-      'city': 'Hồ Chí Minh',
-      'lat': 10.77303,
-      'lng': 106.69341,
-      'image': 'https://images.unsplash.com/photo-1517604931442-7e0c8ed2963c?q=80&w=600&auto=format&fit=crop',
-    },
-    {
-      'id': 'stella_van_hanh',
-      'name': 'STELLA CINEMA VẠN HẠNH MALL',
-      'address': 'Tầng 6, Vạn Hạnh Mall, 11 Sư Vạn Hạnh, Quận 10, TP. Hồ Chí Minh',
-      'city': 'Hồ Chí Minh',
-      'lat': 10.77055,
-      'lng': 106.66954,
-      'image': 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?q=80&w=600&auto=format&fit=crop',
-    },
-    {
-      'id': 'stella_mipec',
-      'name': 'STELLA CINEMA MIPEC LONG BIÊN',
-      'address': 'Tầng 5, TTTM Mipec Long Biên, số 2 Long Biên 2, Ngọc Lâm, Long Biên, Hà Nội',
-      'city': 'Hà Nội',
-      'lat': 21.04535,
-      'lng': 105.86649,
-      'image': 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=600&auto=format&fit=crop',
-    },
-    {
-      'id': 'stella_da_nang',
-      'name': 'STELLA CINEMA ĐÀ NẴNG',
-      'address': 'TTTM CoopMart, 478 Điện Biên Phủ, Thanh Khê, Đà Nẵng',
-      'city': 'Đà Nẵng',
-      'lat': 16.0620,
-      'lng': 108.1885,
-      'image': 'https://images.unsplash.com/photo-1574267432553-4b4628081c31?q=80&w=600&auto=format&fit=crop',
-    },
-    {
-      'id': 'stella_can_tho',
-      'name': 'STELLA CINEMA CẦN THƠ',
-      'address': 'Tầng 2, TTTM Sense City, số 1 Đại Lộ Hòa Bình, Ninh Kiều, Cần Thơ',
-      'city': 'Cần Thơ',
-      'lat': 10.0355,
-      'lng': 105.7836,
-      'image': 'https://images.unsplash.com/photo-1440404653325-ab127d49abc1?q=80&w=600&auto=format&fit=crop',
-    }
-  ];
-
+  // Danh sách rạp lấy trực tiếp từ Firestore (theatersProvider) - đồng bộ với
+  // toàn bộ app thay vì hardcode riêng như trước. Dùng Map để giữ nguyên logic
+  // tính khoảng cách/lọc bên dưới (đã viết cho cấu trúc Map, đỡ phải đổi lại).
+  List<Map<String, dynamic>> _allTheaters = [];
   List<Map<String, dynamic>> _processedTheaters = [];
 
   @override
   void initState() {
     super.initState();
-    _processedTheaters = List.from(_allTheaters);
     _determineUserPosition();
+  }
+
+  void _syncTheatersFromProvider(List<Theater> theaters) {
+    _allTheaters = theaters
+        .map((t) => {
+              'id': t.id,
+              'name': t.name,
+              'address': t.address,
+              'city': t.city,
+              'lat': t.lat,
+              'lng': t.lng,
+            })
+        .toList();
+    _filterAndSortTheaters();
   }
 
   // FIX DA XONG: Dung LocationSettings de diet triet de warning 'desiredAccuracy is deprecated'
@@ -178,10 +146,29 @@ class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Đồng bộ danh sách rạp từ Firestore mỗi khi provider phát dữ liệu mới,
+    // thay vì danh sách hardcode riêng của màn này trước đây.
+    ref.listen<AsyncValue<List<Theater>>>(theatersProvider, (previous, next) {
+      final theaters = next.valueOrNull;
+      if (theaters != null) {
+        setState(() => _syncTheatersFromProvider(theaters));
+      }
+    });
+    final theatersAsync = ref.watch(theatersProvider);
+    if (_allTheaters.isEmpty) {
+      final initial = theatersAsync.valueOrNull;
+      if (initial != null && initial.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _syncTheatersFromProvider(initial));
+        });
+      }
+    }
+    final cities = ['Tất cả', ..._allTheaters.map((t) => t['city'] as String).toSet()];
+
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         centerTitle: true,
         title: const Text(
@@ -193,17 +180,19 @@ class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Column(
+      body: theatersAsync.isLoading && _allTheaters.isEmpty
+          ? const Center(child: CircularProgressIndicator(color: Colors.amber))
+          : Column(
         children: [
           Container(
             height: 55,
             padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
-            color: const Color(0xFF16161F),
+            color: const Color(0xFF0A0A0A),
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
-              itemCount: _cities.length,
+              itemCount: cities.length,
               itemBuilder: (context, index) {
-                final city = _cities[index];
+                final city = cities[index];
                 final isSelected = _selectedCity == city;
                 return GestureDetector(
                   onTap: () {
@@ -270,7 +259,7 @@ class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
           Expanded(
             flex: 4,
             child: Container(
-              color: const Color(0xFF0F0F13),
+              color: const Color(0xFF000000),
               child: _processedTheaters.isEmpty
                   ? const Center(child: Text('Không tìm thấy rạp Stella ở khu vực này.', style: TextStyle(color: Colors.grey)))
                   : ListView.builder(
@@ -284,7 +273,7 @@ class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
                   return Container(
                     margin: const EdgeInsets.only(bottom: 14),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF16161F),
+                      color: const Color(0xFF0A0A0A),
                       borderRadius: BorderRadius.circular(16),
                       border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                     ),
@@ -293,16 +282,11 @@ class _TheaterMapsScreenState extends State<TheaterMapsScreen> {
                       children: [
                         ClipRRect(
                           borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                          child: Image.network(
-                            theater['image'],
+                          child: Container(
                             height: 110,
                             width: double.infinity,
-                            fit: BoxFit.cover,
-                            errorBuilder: (c, e, s) => Container(
-                              height: 110,
-                              color: const Color(0xFF222232),
-                              child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 40),
-                            ),
+                            color: const Color(0xFF222232),
+                            child: const Icon(Icons.theaters_rounded, color: Colors.amber, size: 40),
                           ),
                         ),
                         Padding(

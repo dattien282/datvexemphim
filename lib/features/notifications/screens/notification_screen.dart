@@ -13,10 +13,21 @@ class NotificationScreen extends StatefulWidget {
 class _NotificationScreenState extends State<NotificationScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
+  late Stream<QuerySnapshot> _notificationsStream;
+
+  Stream<QuerySnapshot> _buildStream() {
+    return FirebaseFirestore.instance
+        .collection('notifications')
+        .where('userEmail', isEqualTo: _userEmail)
+        .orderBy('createdAt', descending: true)
+        .snapshots();
+  }
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    _notificationsStream = _buildStream();
   }
 
   @override
@@ -28,7 +39,9 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
   String get _userEmail => FirebaseAuth.instance.currentUser?.email ?? '';
 
   void _markAsRead(String docId) {
-    FirebaseFirestore.instance.collection('notifications').doc(docId).update({'isRead': true});
+    FirebaseFirestore.instance.collection('notifications').doc(docId).update({'isRead': true}).catchError((error) {
+      print("Lỗi khi cập nhật isRead: $error");
+    });
   }
 
   void _clearAllNotifications() async {
@@ -100,9 +113,9 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         centerTitle: true,
         title: const Text(
@@ -135,12 +148,32 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
         ),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('notifications')
-            .where('userEmail', isEqualTo: _userEmail)
-            .orderBy('createdAt', descending: true)
-            .snapshots(),
+        stream: _notificationsStream,
         builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      "Lỗi tải thông báo: ${snapshot.error}",
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.redAccent, fontSize: 12),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () => setState(() => _notificationsStream = _buildStream()),
+                    icon: const Icon(Icons.refresh_rounded, color: Colors.black, size: 18),
+                    label: const Text('THỬ LẠI', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                  ),
+                ],
+              ),
+            );
+          }
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.amber));
           }
@@ -231,7 +264,7 @@ class _NotificationScreenState extends State<NotificationScreen> with SingleTick
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: isRead ? const Color(0xFF16161F) : const Color(0xFF1E1E2A),
+                  color: isRead ? const Color(0xFF0A0A0A) : const Color(0xFF121212),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
                     color: isRead ? Colors.white.withValues(alpha: 0.03) : Colors.amber.withValues(alpha: 0.2),

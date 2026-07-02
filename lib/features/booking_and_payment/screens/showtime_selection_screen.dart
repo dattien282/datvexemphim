@@ -1,88 +1,72 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../../providers/theaters_provider.dart';
+import '../../theater_manager/screens/room_management_screen.dart' show roomFormatColor;
 import 'seat_booking_screen.dart';
 
-class ShowtimeSelectionScreen extends StatefulWidget {
+class ShowtimeSelectionScreen extends ConsumerStatefulWidget {
   final Map<String, dynamic> movieData;
   const ShowtimeSelectionScreen({super.key, required this.movieData});
 
   @override
-  State<ShowtimeSelectionScreen> createState() => _ShowtimeSelectionScreenState();
+  ConsumerState<ShowtimeSelectionScreen> createState() => _ShowtimeSelectionScreenState();
 }
 
-class _ShowtimeSelectionScreenState extends State<ShowtimeSelectionScreen> {
+class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScreen> {
   String? _selectedTheater;
   String? _selectedDate;
   String? _selectedTime;
-
-  // DANH SÁCH HỆ THỐNG ĐẠI RẠP STELLA ĐỊNH VỊ THỰC TẾ
-  final List<String> _theaters = [
-    'Stella Cinema Nguyễn Du (Quận 1)',
-    'Stella Cinema Vạn Hạnh Mall (Quận 10)',
-    'Stella Cinema Mipec Long Biên (Hà Nội)',
-    'Stella Cinema Đà Nẵng (Thanh Khê)',
-    'Stella Cinema Cần Thơ (Sense City)'
-  ];
-
-  // HỆ THỐNG NGÀY CHIẾU LỊCH TRÌNH THỰC TẾ DYNAMIC THEO THỜI GIAN THỰC
-  final List<String> _dates = [];
-
-  // KHUNG SUẤT CHIẾU ĐỘNG CHUYÊN NGHIỆP
-  final List<String> _showtimes = ['09:30', '12:15', '15:00', '17:45', '19:30', '21:15', '23:00'];
+  // Suất chiếu thật (do theater_manager tạo trong collection 'showtimes')
+  // khớp rạp + phim đã chọn. null = chưa tra cứu; [] = tra cứu xong, không có.
+  List<QueryDocumentSnapshot>? _realShowtimes;
+  QueryDocumentSnapshot? _selectedShowtimeDoc;
 
   @override
   void initState() {
     super.initState();
-    _generateRealTimeDates();
   }
 
-  void _generateRealTimeDates() {
-    final now = DateTime.now();
-    for (int i = 0; i < 4; i++) {
-      final date = now.add(Duration(days: i));
-      String prefix = "";
-      if (i == 0) {
-        prefix = "Hôm nay";
-      } else {
-        switch (date.weekday) {
-          case DateTime.monday:
-            prefix = "Thứ Hai";
-            break;
-          case DateTime.tuesday:
-            prefix = "Thứ Ba";
-            break;
-          case DateTime.wednesday:
-            prefix = "Thứ Tư";
-            break;
-          case DateTime.thursday:
-            prefix = "Thứ Năm";
-            break;
-          case DateTime.friday:
-            prefix = "Thứ Sáu";
-            break;
-          case DateTime.saturday:
-            prefix = "Thứ Bảy";
-            break;
-          case DateTime.sunday:
-            prefix = "Chủ Nhật";
-            break;
+  Future<void> _loadRealShowtimes(String theater) async {
+    setState(() {
+      _realShowtimes = null;
+      _selectedShowtimeDoc = null;
+      _selectedDate = null;
+      _selectedTime = null;
+    });
+    final movieTitle = widget.movieData['title'];
+    final snap = await FirebaseFirestore.instance
+        .collection('showtimes')
+        .where('theaterName', isEqualTo: theater)
+        .where('movieTitle', isEqualTo: movieTitle)
+        .where('status', isEqualTo: 'active')
+        .get();
+    if (!mounted) return;
+    final docs = snap.docs.toList()
+      ..sort((a, b) {
+        final ad = '${a['date']} ${a['time']}';
+        final bd = '${b['date']} ${b['time']}';
+        return ad.compareTo(bd);
+      });
+    setState(() {
+      _realShowtimes = docs;
+      if (docs.isNotEmpty) {
+        // Tự động chọn ngày đầu tiên có suất chiếu
+        final dates = docs.map((d) => (d.data() as Map)['date'] as String).toSet().toList()..sort();
+        if (dates.isNotEmpty) {
+          _selectedDate = dates.first;
         }
       }
-      final dayStr = date.day.toString().padLeft(2, '0');
-      final monthStr = date.month.toString().padLeft(2, '0');
-      _dates.add("$prefix ($dayStr/$monthStr)");
-    }
-    // Chọn sẵn ngày hôm nay mặc định
-    if (_dates.isNotEmpty) {
-      _selectedDate = _dates[0];
-    }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
+    final theaterNames = ref.watch(theaterNamesProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         centerTitle: true,
         title: const Text('CHỌN LỊCH CHIẾU', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
@@ -126,73 +110,38 @@ class _ShowtimeSelectionScreenState extends State<ShowtimeSelectionScreen> {
             const Text('1. CHỌN RẠP PHIM STELLA', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
-              dropdownColor: const Color(0xFF16161F),
+              dropdownColor: const Color(0xFF0A0A0A),
               decoration: InputDecoration(
-                filled: true, fillColor: const Color(0xFF16161F),
+                filled: true, fillColor: const Color(0xFF0A0A0A),
                 border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               ),
               style: const TextStyle(color: Colors.white, fontSize: 13),
               hint: const Text('Vui lòng chọn cụm rạp gần bạn', style: TextStyle(color: Colors.white38, fontSize: 13)),
               value: _selectedTheater,
-              items: _theaters.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-              onChanged: (val) => setState(() => _selectedTheater = val),
-            ),
-            const SizedBox(height: 25),
-
-            // 2. CHỌN NGÀY CHIẾU (Dạng thẻ trượt ngang mượt mà)
-            const Text('2. CHỌN NGÀY XEM PHIM', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 45,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: _dates.length,
-                itemBuilder: (context, index) {
-                  final date = _dates[index];
-                  final isSelected = _selectedDate == date;
-                  return GestureDetector(
-                    onTap: () => setState(() => _selectedDate = date),
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: isSelected ? Colors.amber : const Color(0xFF16161F),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(date, style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const SizedBox(height: 25),
-
-            // 3. CHỌN SUẤT CHIẾU GIỜ GIẤC
-            const Text('3. CHỌN KHUNG GIỜ CHIẾU', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
-            const SizedBox(height: 12),
-            GridView.builder(
-              shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 4, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 2.2),
-              itemCount: _showtimes.length,
-              itemBuilder: (context, index) {
-                final time = _showtimes[index];
-                final isSelected = _selectedTime == time;
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedTime = time),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isSelected ? Colors.amber : const Color(0xFF16161F),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.05)),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(time, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
-                );
+              items: theaterNames.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+              onChanged: (val) {
+                setState(() => _selectedTheater = val);
+                if (val != null) _loadRealShowtimes(val);
               },
             ),
+            const SizedBox(height: 25),
+
+            if (_selectedTheater != null && _realShowtimes == null)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2)),
+              )
+            else if (_realShowtimes != null && _realShowtimes!.isNotEmpty)
+              ..._buildRealShowtimeSelectors()
+            else if (_selectedTheater != null && _realShowtimes != null && _realShowtimes!.isEmpty)
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Rạp này hiện chưa có suất chiếu nào được lên lịch cho bộ phim này.',
+                  style: TextStyle(color: Colors.redAccent, fontSize: 13),
+                ),
+              ),
             const SizedBox(height: 40),
 
             // NÚT ĐI TIẾP SANG CHỌN GHẾ
@@ -205,6 +154,14 @@ class _ShowtimeSelectionScreenState extends State<ShowtimeSelectionScreen> {
                   completeMovieData['selectedTheater'] = _selectedTheater;
                   completeMovieData['selectedDate'] = _selectedDate;
                   completeMovieData['selectedTime'] = _selectedTime;
+                  if (_selectedShowtimeDoc != null) {
+                    final d = _selectedShowtimeDoc!.data() as Map<String, dynamic>;
+                    completeMovieData['showtimeId'] = _selectedShowtimeDoc!.id;
+                    completeMovieData['priceStandard'] = d['priceStandard'];
+                    completeMovieData['priceVip'] = d['priceVip'];
+                    completeMovieData['roomName'] = d['roomName'];
+                    completeMovieData['roomFormat'] = d['roomFormat'];
+                  }
 
                   Navigator.push(
                     context,
@@ -219,5 +176,93 @@ class _ShowtimeSelectionScreenState extends State<ShowtimeSelectionScreen> {
         ),
       ),
     );
+  }
+
+  // ── Suất chiếu thật (từ collection 'showtimes' do theater_manager tạo) ──
+  List<Widget> _buildRealShowtimeSelectors() {
+    final docs = _realShowtimes!;
+    final dates = docs.map((d) => (d.data() as Map)['date'] as String).toSet().toList()..sort();
+    final timesForDate = docs
+        .where((d) => (d.data() as Map)['date'] == _selectedDate)
+        .toList()
+      ..sort((a, b) => ((a.data() as Map)['time'] as String).compareTo((b.data() as Map)['time'] as String));
+
+    return [
+      const Text('2. CHỌN NGÀY XEM PHIM', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+      const SizedBox(height: 12),
+      SizedBox(
+        height: 45,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: dates.length,
+          itemBuilder: (context, index) {
+            final date = dates[index];
+            final isSelected = _selectedDate == date;
+            return GestureDetector(
+              onTap: () => setState(() {
+                _selectedDate = date;
+                _selectedTime = null;
+                _selectedShowtimeDoc = null;
+              }),
+              child: Container(
+                margin: const EdgeInsets.only(right: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.amber : const Color(0xFF0A0A0A),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                alignment: Alignment.center,
+                child: Text(date, style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
+              ),
+            );
+          },
+        ),
+      ),
+      const SizedBox(height: 25),
+      const Text('3. CHỌN KHUNG GIỜ CHIẾU', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+      const SizedBox(height: 12),
+      if (_selectedDate == null)
+        const Text('Chọn ngày để xem khung giờ.', style: TextStyle(color: Colors.white38, fontSize: 12))
+      else
+        // Cùng 1 khung giờ có thể có nhiều suất chiếu riêng biệt (khác phòng/
+        // định dạng: 2D Phụ đề, 2D Lồng tiếng, VIP, Premium) - so sánh theo
+        // doc.id thay vì chuỗi giờ để không gộp nhầm 2 suất trùng giờ khác phòng.
+        GridView.builder(
+          shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.7),
+          itemCount: timesForDate.length,
+          itemBuilder: (context, index) {
+            final doc = timesForDate[index];
+            final data = doc.data() as Map;
+            final time = data['time'] as String;
+            final format = data['roomFormat'] as String? ?? '2D Phụ đề';
+            final isSelected = _selectedShowtimeDoc?.id == doc.id;
+            final formatColor = roomFormatColor(format);
+            return GestureDetector(
+              onTap: () => setState(() {
+                _selectedTime = time;
+                _selectedShowtimeDoc = doc;
+              }),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: isSelected ? Colors.amber : const Color(0xFF0A0A0A),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.05)),
+                ),
+                alignment: Alignment.center,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(time, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                    const SizedBox(height: 3),
+                    Text(format,
+                        style: TextStyle(color: isSelected ? Colors.black54 : formatColor, fontWeight: FontWeight.bold, fontSize: 8)),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+    ];
   }
 }

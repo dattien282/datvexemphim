@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../main.dart';
 import 'admin_movies_screen.dart';
 import 'admin_users_screen.dart';
 import 'admin_vouchers_screen.dart';
 import 'admin_revenue_screen.dart';
+import 'admin_reviews_screen.dart';
+import 'admin_broadcast_screen.dart';
+import 'admin_audit_log_screen.dart';
+import 'admin_age_verification_screen.dart';
+import 'admin_server_config_screen.dart';
 
 class AdminDashboardScreen extends ConsumerWidget {
   const AdminDashboardScreen({super.key});
@@ -19,7 +26,7 @@ class AdminDashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -28,10 +35,14 @@ class AdminDashboardScreen extends ConsumerWidget {
           'ADMIN DASHBOARD',
           style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1),
         ),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
-          onPressed: () => Navigator.pop(context),
-        ),
+        automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout_rounded, color: Colors.redAccent),
+            onPressed: () => _handleAdminLogout(context),
+            tooltip: 'Đăng xuất',
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -76,6 +87,16 @@ class AdminDashboardScreen extends ConsumerWidget {
           () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminVouchersScreen()))),
       _AdminAction(Icons.bar_chart_rounded, 'Báo cáo\nDoanh thu', Colors.green,
           () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRevenueScreen()))),
+      _AdminAction(Icons.rate_review_rounded, 'Kiểm duyệt\nĐánh giá', Colors.pinkAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewsScreen()))),
+      _AdminAction(Icons.campaign_rounded, 'Gửi thông báo\nchung', Colors.amber,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBroadcastScreen()))),
+      _AdminAction(Icons.history_rounded, 'Nhật ký\nHành động', Colors.cyanAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAuditLogScreen()))),
+      _AdminAction(Icons.badge_rounded, 'Duyệt xác minh\nđộ tuổi', Colors.redAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAgeVerificationScreen()))),
+      _AdminAction(Icons.settings_suggest_rounded, 'Cấu hình\nServer', Colors.blueGrey,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminServerConfigScreen()))),
     ];
 
     return GridView.count(
@@ -90,27 +111,86 @@ class AdminDashboardScreen extends ConsumerWidget {
   }
 
   Widget _buildActionCard(_AdminAction action) {
-    return GestureDetector(
-      onTap: action.onTap,
-      child: Container(
-        decoration: BoxDecoration(
-          color: action.color.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: action.color.withValues(alpha: 0.3)),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(action.icon, color: action.color, size: 28),
-            const SizedBox(height: 8),
-            Text(
-              action.label,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: action.color, fontSize: 12, fontWeight: FontWeight.bold, height: 1.3),
-            ),
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            action.color.withValues(alpha: 0.2),
+            action.color.withValues(alpha: 0.05)
           ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: action.color.withValues(alpha: 0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: action.color.withValues(alpha: 0.1),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          )
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: action.onTap,
+          splashColor: action.color.withValues(alpha: 0.2),
+          highlightColor: action.color.withValues(alpha: 0.1),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: action.color.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(action.icon, color: action.color, size: 28),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                action.label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9), 
+                  fontSize: 12, 
+                  fontWeight: FontWeight.bold, 
+                  height: 1.3
+                ),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+}
+
+void _handleAdminLogout(BuildContext context) async {
+  final navigator = Navigator.of(context);
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF0A0A0A),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('ĐĂNG XUẤT', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+      content: const Text('Bạn có chắc muốn đăng xuất?', style: TextStyle(color: Colors.white70, fontSize: 13)),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('KHÔNG', style: TextStyle(color: Colors.grey))),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('ĐĂNG XUẤT', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    ),
+  );
+  if (confirm == true) {
+    await FirebaseAuth.instance.signOut();
+    navigator.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const MainAppWrapper()),
+      (route) => false,
     );
   }
 }
@@ -179,19 +259,41 @@ class _StatsRow extends StatelessWidget {
 Widget _statCard(String label, String value, IconData icon, Color color) {
   return Expanded(
     child: Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.2)),
+        gradient: LinearGradient(
+          colors: [
+            color.withValues(alpha: 0.2),
+            color.withValues(alpha: 0.05),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.15),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: 8),
-          Text(value, style: TextStyle(color: color, fontSize: 20, fontWeight: FontWeight.bold)),
-          Text(label, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(height: 12),
+          Text(value, style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w500)),
         ],
       ),
     ),
@@ -207,7 +309,7 @@ class _RevenueCard extends StatelessWidget {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('tickets')
-          .where('payment_status', isEqualTo: 'COMPLETED')
+          .where('paymentStatus', whereIn: ['COMPLETED', 'CHECKED_IN'])
           .snapshots(),
       builder: (context, snap) {
         int cancelledCount = 0;
@@ -218,8 +320,7 @@ class _RevenueCard extends StatelessWidget {
           completedCount = snap.data!.docs.length;
           for (final doc in snap.data!.docs) {
             final data = doc.data() as Map<String, dynamic>;
-            // Sửa lỗi sai tên field: totalPrice đồng bộ với RecentTickets
-            totalRevenue += (data['totalPrice'] as num? ?? 0).toInt();
+            totalRevenue += (data['totalAmount'] as num? ?? 0).toInt();
           }
         }
 
@@ -228,31 +329,45 @@ class _RevenueCard extends StatelessWidget {
 
         return Container(
           width: double.infinity,
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF1A2A1A), Color(0xFF0F1F0F)],
+              colors: [Color(0xFF2E7D32), Color(0xFF1B5E20)],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.green.withValues(alpha: 0.2)),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.greenAccent.withValues(alpha: 0.2),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('TỔNG DOANH THU', style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
-              const SizedBox(height: 8),
-              Text('$formatted đ', style: const TextStyle(color: Colors.greenAccent, fontSize: 28, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 16),
+              const Row(
+                children: [
+                  Icon(Icons.account_balance_wallet_rounded, color: Colors.white70, size: 16),
+                  SizedBox(width: 8),
+                  Text('TỔNG DOANH THU TOÀN HỆ THỐNG', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text('$formatted đ', style: const TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+              const SizedBox(height: 20),
+              Container(height: 1, color: Colors.white.withValues(alpha: 0.1)),
+              const SizedBox(height: 20),
               Row(
                 children: [
-                  _revenueStat(Icons.check_circle_rounded, 'Giao dịch thành công', '$completedCount', Colors.green),
+                  _revenueStat(Icons.check_circle_rounded, 'Giao dịch thành công', '$completedCount', Colors.lightGreenAccent),
                   const SizedBox(width: 20),
                   StreamBuilder<QuerySnapshot>(
                     stream: FirebaseFirestore.instance
                         .collection('tickets')
-                        .where('payment_status', isEqualTo: 'CANCELLED')
+                        .where('paymentStatus', isEqualTo: 'CANCELLED')
                         .snapshots(),
                     builder: (context, cancelSnap) {
                       cancelledCount = cancelSnap.data?.docs.length ?? 0;
@@ -294,7 +409,7 @@ class _RecentTickets extends StatelessWidget {
     return StreamBuilder<QuerySnapshot>(
       stream: FirebaseFirestore.instance
           .collection('tickets')
-          .orderBy('created_at', descending: true)
+          .orderBy('createdAt', descending: true)
           .limit(5)
           .snapshots(),
       builder: (context, snap) {
@@ -305,7 +420,7 @@ class _RecentTickets extends StatelessWidget {
         return Column(
           children: snap.data!.docs.map((doc) {
             final d = doc.data() as Map<String, dynamic>;
-            final status = d['payment_status'] ?? 'UNKNOWN';
+            final status = d['paymentStatus'] ?? 'UNKNOWN';
             final statusColor = status == 'COMPLETED'
                 ? Colors.greenAccent
                 : status == 'CANCELLED'
@@ -335,7 +450,7 @@ class _RecentTickets extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(d['movieTitle'] ?? d['title'] ?? '—', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                        Text(d['movieTitle'] ?? '—', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                         Text(d['email'] ?? d['userId'] ?? '—', style: const TextStyle(color: Colors.white38, fontSize: 11)),
                       ],
                     ),
@@ -344,7 +459,7 @@ class _RecentTickets extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        '${((d['totalPrice'] as num? ?? 0).toInt()).toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')} đ',
+                        '${((d['totalAmount'] as num? ?? 0).toInt()).toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')} đ',
                         style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 4),

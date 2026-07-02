@@ -1,0 +1,110 @@
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+final authRepositoryProvider = Provider<AuthRepository>((ref) {
+  return AuthRepository(
+    auth: FirebaseAuth.instance,
+    firestore: FirebaseFirestore.instance,
+  );
+});
+
+class AuthRepository {
+  final FirebaseAuth _auth;
+  final FirebaseFirestore _firestore;
+
+  AuthRepository({
+    required FirebaseAuth auth,
+    required FirebaseFirestore firestore,
+  })  : _auth = auth,
+        _firestore = firestore;
+
+  Stream<User?> get authStateChange => _auth.authStateChanges();
+
+  User? get currentUser => _auth.currentUser;
+
+  Future<UserCredential> signInWithEmail(String email, String password) async {
+    return await _auth.signInWithEmailAndPassword(
+        email: email, password: password);
+  }
+
+  Future<UserCredential> signUpWithEmail(String email, String password) async {
+    return await _auth.createUserWithEmailAndPassword(
+        email: email, password: password);
+  }
+
+  Future<void> sendEmailVerification() async {
+    await _auth.currentUser?.sendEmailVerification();
+  }
+
+  Future<void> createUserDocument({
+    required String uid,
+    required String email,
+    required String name,
+    required String phone,
+    required String gender,
+    required DateTime birthDate,
+  }) async {
+    await _firestore.collection('users').doc(uid).set({
+      'email': email,
+      'displayName': name,
+      'phone': phone,
+      'gender': gender,
+      'birthDate': Timestamp.fromDate(birthDate),
+      'role': 'user',
+      'isAdmin': false,
+      'wallet_balance': 500000,
+      'created_at': Timestamp.now(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> createGoogleUserDocumentIfNeeded(User user) async {
+    final userDoc = await _firestore.collection('users').doc(user.uid).get();
+    if (!userDoc.exists) {
+      await _firestore.collection('users').doc(user.uid).set({
+        'email': user.email,
+        'displayName': user.displayName ?? '',
+        'photoURL': user.photoURL ?? '',
+        'role': 'user',
+        'isAdmin': false,
+        'wallet_balance': 500000,
+        'created_at': Timestamp.now(),
+      });
+    }
+  }
+
+  Future<Map<String, dynamic>?> getUserData(String uid) async {
+    final doc = await _firestore.collection('users').doc(uid).get();
+    return doc.data();
+  }
+
+  Future<void> topUpWallet(String uid, int amount) async {
+    await _firestore.collection('users').doc(uid).set(
+      {'wallet_balance': FieldValue.increment(amount)},
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> resetPassword(String email) async {
+    await _auth.sendPasswordResetEmail(email: email);
+  }
+
+  Future<void> signOut() async {
+    await _auth.signOut();
+    try { await GoogleSignIn().disconnect(); } catch (_) {}
+    await GoogleSignIn().signOut();
+  }
+
+  Future<UserCredential?> signInWithGoogle() async {
+    final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+    if (googleUser == null) return null;
+
+    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+    final credential = GoogleAuthProvider.credential(
+      accessToken: googleAuth.accessToken,
+      idToken: googleAuth.idToken,
+    );
+    return await _auth.signInWithCredential(credential);
+  }
+}

@@ -1,29 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../providers/user_provider.dart';
+import '../../../providers/theaters_provider.dart';
+import 'admin_audit_log.dart';
 
-const _theaters = [
-  'Stella Cinema – Hồ Chí Minh',
-  'Stella Cinema – Hà Nội',
-  'Stella Cinema – Đà Nẵng',
-  'Stella Cinema – Cần Thơ',
-  'Stella Cinema – Hải Phòng',
-];
-
-class AdminUsersScreen extends StatefulWidget {
+class AdminUsersScreen extends ConsumerStatefulWidget {
   const AdminUsersScreen({super.key});
 
   @override
-  State<AdminUsersScreen> createState() => _AdminUsersScreenState();
+  ConsumerState<AdminUsersScreen> createState() => _AdminUsersScreenState();
 }
 
-class _AdminUsersScreenState extends State<AdminUsersScreen> {
+class _AdminUsersScreenState extends ConsumerState<AdminUsersScreen> {
   String _search = '';
 
   @override
   Widget build(BuildContext context) {
+    final theaterNames = ref.watch(theaterNamesProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -84,7 +80,7 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
                 return ListView.builder(
                   padding: const EdgeInsets.all(16),
                   itemCount: docs.length,
-                  itemBuilder: (context, i) => _UserCard(doc: docs[i]),
+                  itemBuilder: (context, i) => _UserCard(doc: docs[i], theaterNames: theaterNames),
                 );
               },
             ),
@@ -98,7 +94,8 @@ class _AdminUsersScreenState extends State<AdminUsersScreen> {
 // ── User card ────────────────────────────────────────────────────────────────
 class _UserCard extends StatelessWidget {
   final QueryDocumentSnapshot doc;
-  const _UserCard({required this.doc});
+  final List<String> theaterNames;
+  const _UserCard({required this.doc, required this.theaterNames});
 
   UserRole _parseRole(Map<String, dynamic> data) {
     return UserRoleExt.fromString(
@@ -180,7 +177,7 @@ class _UserCard extends StatelessWidget {
                   ),
                   hint: const Text('Chọn rạp', style: TextStyle(color: Colors.white38, fontSize: 12)),
                   style: const TextStyle(color: Colors.white, fontSize: 12),
-                  items: _theaters.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                  items: theaterNames.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
                   onChanged: (v) => setDlg(() => selectedTheater = v),
                 ),
               ],
@@ -205,6 +202,13 @@ class _UserCard extends StatelessWidget {
                     .collection('users')
                     .doc(doc.id)
                     .update(updates);
+                await logAdminAction(
+                  action: 'change_role',
+                  targetCollection: 'users',
+                  targetId: doc.id,
+                  before: {'role': data['role'], 'assignedTheater': data['assignedTheater']},
+                  after: {'role': selected.firestoreValue, 'assignedTheater': selectedTheater},
+                );
               },
               style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
               child: const Text('LƯU', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),

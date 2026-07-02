@@ -1,5 +1,7 @@
 import 'dart:developer';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class NotificationService {
   // Tạo instance của Firebase Messaging
@@ -19,15 +21,13 @@ class NotificationService {
       log('Chú ý: Người dùng từ chối cấp quyền thông báo.');
     }
 
-    // 2. Lấy FCM Token (Mã định danh duy nhất của cái điện thoại này)
-    try {
-      String? token = await _fcm.getToken();
-      log("================== FCM TOKEN CỦA BẠN ĐÂY ==================");
-      log(token ?? "Không lấy được mã token");
-      log("==========================================================");
-    } catch (e) {
-      log("Lỗi khi lấy token: $e");
-    }
+    // 2. Lấy FCM Token và lưu vào Firestore - trước đây token chỉ log ra
+    // console rồi bỏ, chưa từng được lưu lại nên server không có cách nào
+    // gửi push notification tới đúng máy của user (tính năng coi như không
+    // hoạt động dù đã xin quyền/khởi tạo FCM).
+    await _saveTokenForCurrentUser();
+    // Token có thể đổi (cài lại app, xoá dữ liệu...) - lắng nghe để cập nhật.
+    _fcm.onTokenRefresh.listen((_) => _saveTokenForCurrentUser());
 
     // 3. Lắng nghe thông báo khi ứng dụng ĐANG MỞ (Foreground)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
@@ -42,5 +42,21 @@ class NotificationService {
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       log('Người dùng vừa bấm vào thông báo: ${message.notification?.title}');
     });
+  }
+
+  Future<void> _saveTokenForCurrentUser() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final token = await _fcm.getToken();
+      if (token == null) return;
+      await FirebaseFirestore.instance.collection('users').doc(user.uid).update({
+        'fcmToken': token,
+        'fcmTokenUpdatedAt': Timestamp.now(),
+      });
+      log('Đã lưu FCM token cho user ${user.uid}');
+    } catch (e) {
+      log('Lỗi khi lưu FCM token: $e');
+    }
   }
 }

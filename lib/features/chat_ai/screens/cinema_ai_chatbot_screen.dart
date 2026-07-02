@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
 import '../../booking_and_payment/screens/movie_detail_screen.dart';
+import '../../../core/constants.dart';
 
 class CinemaAiChatbotScreen extends StatefulWidget {
   const CinemaAiChatbotScreen({super.key});
@@ -15,8 +17,10 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
   final ScrollController _scrollController = ScrollController();
   
   bool _isTyping = false;
-  bool _isGeminiInitialized = false;
-  GenerativeModel? _geminiModel;
+  // Trạng thái Gemini giờ chỉ để hiển thị UI ("Trực tuyến với Gemini AI" hay
+  // "Fallback offline") - server tự quyết định có dùng được Gemini hay không
+  // dựa trên GEMINI_API_KEY của nó, client không còn giữ API key nào cả.
+  bool _isGeminiAvailable = true;
 
   // Danh sách hội thoại
   final List<Map<String, dynamic>> _messages = [];
@@ -29,58 +33,20 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
       'text': 'Xin chào bạn! Tôi là Trợ lý AI thông minh của Stella Cinema G5. Tôi có thể giúp bạn xem thông tin phim đang hot, giá vé, bắp nước hoặc hỗ trợ đặt vé nhanh đó. Hôm nay bạn muốn tìm phim gì nào? 🎬🍿',
       'movieData': null,
     });
-    _initGemini();
-  }
-
-  // Khởi tạo Gemini Model động (lấy key từ Environment hoặc Firestore Config)
-  Future<void> _initGemini() async {
-    String key = const String.fromEnvironment('GEMINI_API_KEY');
-
-    if (key.isEmpty) {
-      try {
-        final doc = await FirebaseFirestore.instance.collection('configs').doc('gemini').get();
-        if (doc.exists) {
-          key = doc.data()?['apiKey'] ?? '';
-        }
-      } catch (e) {
-        debugPrint("Lỗi đọc cấu hình Gemini từ Firestore: $e");
-      }
-    }
-
-    if (key.isNotEmpty) {
-      try {
-        setState(() {
-          _geminiModel = GenerativeModel(
-            model: 'gemini-1.5-flash',
-            apiKey: key,
-            systemInstruction: Content.system(
-              "Bạn là Trợ lý ảo AI lịch sự và chuyên nghiệp của hệ thống rạp phim Stella Cinema. "
-              "Quy tắc giao tiếp bắt buộc:\n"
-              "1. Luôn xưng hô với khách hàng lịch sự là 'bạn' (ví dụ: 'chào bạn', 'bạn chọn phim gì', 'bạn cần trợ giúp gì'). Tự xưng là 'Stella' hoặc 'tôi'. Tuyệt đối tránh dùng các từ ngữ thân mật quá mức hoặc suồng sã như 'ní'.\n"
-              "2. Phong cách trả lời: Lịch sự, chuyên nghiệp, hỗ trợ tận tình, dùng emoji phù hợp.\n"
-              "3. Trả lời súc tích, ngắn gọn (trong khoảng 2-4 câu), trừ khi được yêu cầu liệt kê bảng giá hoặc địa điểm.\n"
-              "4. Luôn dựa trên dữ liệu thực tế được cung cấp trong prompt để tư vấn, không tự bịa tên phim khác đang chiếu."
-            ),
-          );
-          _isGeminiInitialized = true;
-        });
-        debugPrint("Đã khởi tạo thành công Gemini AI.");
-      } catch (e) {
-        debugPrint("Lỗi khởi tạo Gemini Model: $e");
-      }
-    } else {
-      debugPrint("Không tìm thấy Gemini API Key. AI chạy chế độ fallback cục bộ.");
-    }
   }
 
   // Xử lý logic AI (chạy Gemini + RAG + Fallback)
   Future<Map<String, dynamic>> _getAiResponseData(String userText) async {
     final String text = userText.toLowerCase().trim();
 
-    // 1. Chạy Gemini thực tế (nếu được cấu hình thành công)
-    if (_isGeminiInitialized && _geminiModel != null) {
+    // 1. Chạy Gemini qua backend proxy (server giữ API key, client không còn
+    // biết key này tồn tại dưới hình thức nào - tránh lộ key qua Firestore
+    // hoặc qua chuỗi biên dịch sẵn trong app như trước đây).
+    if (_isGeminiAvailable) {
       try {
-        // Truy vấn danh sách phim thật từ Firestore để làm ngữ cảnh (RAG)
+        // Truy vấn danh sách phim thật từ Firestore để làm ngữ cảnh (RAG) -
+        // đây là dữ liệu công khai (ai cũng đọc được collection 'movies'),
+        // không phải secret, nên vẫn lấy trực tiếp từ client như trước.
         String movieContext = "";
         try {
           final moviesSnapshot = await FirebaseFirestore.instance.collection('movies').get();
@@ -93,42 +59,47 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
           }
         } catch (_) {}
 
-        final prompt = "Câu hỏi của khách hàng: '$userText'\n$movieContext\n\nHãy tư vấn lịch sự, xưng hô 'bạn' và 'tôi' nhé.";
-
         // Trích xuất lịch sử hội thoại gần nhất (tối đa 10 tin nhắn) để truyền ngữ cảnh hội thoại liên tục
         final history = _messages.skip(1).take(10).map((msg) {
-          final role = msg['sender'] == 'user' ? 'user' : 'model';
-          return Content(role, [TextPart(msg['text'] ?? '')]);
+          return {'role': msg['sender'] == 'user' ? 'user' : 'model', 'text': msg['text'] ?? ''};
         }).toList();
 
-        final response = await _geminiModel!.generateContent(
-          [...history, Content.text(prompt)],
-        );
+        final response = await http.post(
+          Uri.parse('${AppConfig.paymentBackendUrl}/gemini-chat'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'message': userText, 'movieContext': movieContext, 'history': history}),
+        ).timeout(const Duration(seconds: 20));
 
-        final responseText = response.text;
-        if (responseText != null && responseText.trim().isNotEmpty) {
-          // Tự động phân tích xem người dùng có muốn đặt bộ phim nào không để đính kèm card đặt vé nhanh
-          Map<String, dynamic>? detectedMovie;
-          try {
-            final moviesSnapshot = await FirebaseFirestore.instance.collection('movies').get();
-            for (var doc in moviesSnapshot.docs) {
-              final data = doc.data();
-              final String title = data['title'] ?? '';
-              if (text.contains(title.toLowerCase())) {
-                detectedMovie = data;
-                detectedMovie['id'] = doc.id;
-                break;
+        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        if (body['success'] == true) {
+          final String responseText = (body['text'] as String? ?? '').trim();
+          if (responseText.isNotEmpty) {
+            // Tự động phân tích xem người dùng có muốn đặt bộ phim nào không để đính kèm card đặt vé nhanh
+            Map<String, dynamic>? detectedMovie;
+            try {
+              final moviesSnapshot = await FirebaseFirestore.instance.collection('movies').get();
+              for (var doc in moviesSnapshot.docs) {
+                final data = doc.data();
+                final String title = data['title'] ?? '';
+                if (text.contains(title.toLowerCase())) {
+                  detectedMovie = data;
+                  detectedMovie['id'] = doc.id;
+                  break;
+                }
               }
-            }
-          } catch (_) {}
+            } catch (_) {}
 
-          return {
-            'text': responseText.trim(),
-            'movieData': detectedMovie,
-          };
+            return {
+              'text': responseText,
+              'movieData': detectedMovie,
+            };
+          }
+        } else if (mounted) {
+          setState(() => _isGeminiAvailable = false);
         }
       } catch (e) {
-        debugPrint("Gemini API bị lỗi hoặc quá tải: $e. Chuyển hướng sang Fallback offline.");
+        debugPrint("Gemini API (qua backend) bị lỗi hoặc quá tải: $e. Chuyển hướng sang Fallback offline.");
+        if (mounted) setState(() => _isGeminiAvailable = false);
       }
     }
 
@@ -241,7 +212,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         title: Row(
           children: [
@@ -256,9 +227,9 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
               children: [
                 const Text('TRỢ LÝ AI STELLA', style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold)),
                 Text(
-                  _isGeminiInitialized ? 'Trực tuyến với Gemini AI' : 'Trực tuyến (Fallback offline)',
+                  _isGeminiAvailable ? 'Trực tuyến với Gemini AI' : 'Trực tuyến (Fallback offline)',
                   style: TextStyle(
-                    color: _isGeminiInitialized ? Colors.greenAccent : Colors.orangeAccent,
+                    color: _isGeminiAvailable ? Colors.greenAccent : Colors.orangeAccent,
                     fontSize: 9,
                     fontWeight: FontWeight.w500,
                   ),
@@ -267,7 +238,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
             ),
           ],
         ),
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -287,7 +258,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
                       margin: const EdgeInsets.only(bottom: 12),
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF16161F),
+                        color: const Color(0xFF0A0A0A),
                         borderRadius: const BorderRadius.only(
                           topLeft: Radius.circular(16),
                           topRight: Radius.circular(16),
@@ -312,7 +283,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
                     decoration: BoxDecoration(
-                      color: isAi ? const Color(0xFF16161F) : Colors.amber,
+                      color: isAi ? const Color(0xFF0A0A0A) : Colors.amber,
                       borderRadius: BorderRadius.only(
                         topLeft: const Radius.circular(16),
                         topRight: const Radius.circular(16),
@@ -421,7 +392,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
           // Thanh nhập hội thoại
           Container(
             padding: const EdgeInsets.all(16),
-            decoration: const BoxDecoration(color: Color(0xFF16161F)),
+            decoration: const BoxDecoration(color: Color(0xFF0A0A0A)),
             child: SafeArea(
               child: Row(
                 children: [
@@ -437,7 +408,7 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
                         hintText: 'Hỏi Stella phim hot, giá vé, combo...',
                         hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
                         filled: true,
-                        fillColor: const Color(0xFF0F0F13),
+                        fillColor: const Color(0xFF000000),
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                       ),

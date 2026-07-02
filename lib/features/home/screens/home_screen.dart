@@ -3,6 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../booking_and_payment/screens/showtime_selection_screen.dart'; // ĐÃ IMPORT: Màn hình chọn Rạp/Ngày/Suất chiếu trung gian
 import '../../booking_and_payment/screens/my_tickets_screen.dart';
 import '../../notifications/screens/notification_screen.dart';
@@ -11,15 +12,17 @@ import '../../maps/screens/theater_maps_screen.dart';
 import '../../auth/screens/login_screen.dart';
 import '../../auth/screens/profile_screen.dart';
 import '../../booking_and_payment/screens/movie_detail_screen.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../viewmodels/movie_viewmodel.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final ValueNotifier<String> _searchQuery = ValueNotifier('');
   final ValueNotifier<String> _selectedCategory = ValueNotifier('Tất cả');
@@ -27,31 +30,48 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   final List<_BannerItem> bannerItems = const [
     _BannerItem(
-      imageUrl: 'https://image.tmdb.org/t/p/original/7cuXIFqZLUWDyfDRue02eqmcUtT.jpg',
+      imageUrl: 'https://images.unsplash.com/photo-1542204165-65bf26472b9b?w=800&q=80',
+      badge: 'THỨ 4 VUI VẺ',
+      badgeColor: Color(0xFFE91E63),
+      title: 'HAPPY WEDNESDAY',
+      subtitle: 'Giảm 10% toàn bộ giao dịch đặt vé vào Thứ 4 hàng tuần',
+      action: _BannerAction.combo,
+    ),
+    _BannerItem(
+      imageUrl: 'https://images.unsplash.com/photo-1557672172-298e090bd0f1?w=800&q=80',
+      badge: 'VOUCHER',
+      badgeColor: Color(0xFF00B0FF),
+      title: 'MÙA HÈ SÔI ĐỘNG',
+      subtitle: 'Nhập mã MUAHE2024 giảm ngay 20K. Bấm để sao chép!',
+      action: _BannerAction.voucher,
+      voucherCode: 'MUAHE2024',
+    ),
+    _BannerItem(
+      imageUrl: 'https://media.themoviedb.org/t/p/w600_and_h900_face/z8OWDTR7pQuZi7jkEuR7yMXRrQt.jpg',
       badge: 'ĐANG CHIẾU',
       badgeColor: Color(0xFFE53935),
-      title: 'MAI',
-      subtitle: 'Trấn Thành • Tâm Lý, Tình Cảm • Rating 8.5⭐',
+      title: 'MINIONS & QUÁI VẬT',
+      subtitle: 'Phiêu Lưu, Hoạt Hình, Hài, Gia Đình',
       action: _BannerAction.movie,
-      movieTitle: 'Mai',
+      movieTitle: 'Minions & Quái Vật',
     ),
     _BannerItem(
-      imageUrl: 'https://image.tmdb.org/t/p/original/6dasJ58GGFcC62H9KuukAryltUp.jpg',
-      badge: 'HOT',
-      badgeColor: Color(0xFFFF6F00),
-      title: 'QUẬT MỘ TRÙNG MA',
-      subtitle: 'Choi Min-sik, Lee Do-hyun • Kinh Dị, Kịch Tính • Rating 9.2⭐',
-      action: _BannerAction.movie,
-      movieTitle: 'Quật Mộ Trùng Ma',
-    ),
-    _BannerItem(
-      imageUrl: 'https://upload.wikimedia.org/wikipedia/en/5/52/Dune_Part_Two_poster.jpeg',
+      imageUrl: 'https://en.wikipedia.org/wiki/Special:FilePath/The_Odyssey_(2026_film)_poster.jpg',
       badge: 'SẮP CHIẾU',
       badgeColor: Color(0xFF1565C0),
-      title: 'DUNE: PHẦN 2',
-      subtitle: 'Denis Villeneuve • Hành Động, Sci-Fi • Rating 9.4⭐',
+      title: 'THE ODYSSEY',
+      subtitle: 'Christopher Nolan • Sử Thi, Phiêu Lưu',
       action: _BannerAction.movie,
-      movieTitle: 'Dune: Hành Tinh Cát - Phần 2',
+      movieTitle: 'The Odyssey',
+    ),
+    _BannerItem(
+      imageUrl: 'https://en.wikipedia.org/wiki/Special:FilePath/Spider-Man_Brand_New_Day_poster.jpg',
+      badge: 'HOT',
+      badgeColor: Color(0xFFFF6F00),
+      title: 'SPIDER-MAN: KHỞI ĐẦU MỚI',
+      subtitle: 'Tom Holland • Hành Động, Siêu Anh Hùng',
+      action: _BannerAction.movie,
+      movieTitle: 'Spider-Man: Khởi Đầu Mới',
     ),
     _BannerItem(
       imageUrl: 'https://images.unsplash.com/photo-1585647347483-22b66260dfff?w=800&q=80',
@@ -75,7 +95,43 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    _seedDatabaseIfNeeded();
+    // Đã tắt auto-seed phim mẫu: giờ `movies` chứa dữ liệu thật do admin quản lý
+    // qua AdminMoviesScreen, seed lại sẽ xoá mất dữ liệu thật đó.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowPromoPopup());
+  }
+
+  // Pop-up quảng bá phim đang chiếu, hiện 1 lần mỗi khi mở app - trừ khi
+  // người dùng tick "Không hiển thị lại" (lưu SharedPreferences theo tên phim,
+  // để khi admin đổi phim quảng bá thì pop-up mới lại hiện đúng 1 lần nữa).
+  Future<void> _maybeShowPromoPopup() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('movies')
+          .where('isShowingNow', isEqualTo: true)
+          .get();
+      final docs = snap.docs.where((d) => d.data()['isDeleted'] != true).toList();
+      if (docs.isEmpty) return;
+      docs.sort((a, b) {
+        final ra = double.tryParse('${a.data()['rating'] ?? 0}') ?? 0;
+        final rb = double.tryParse('${b.data()['rating'] ?? 0}') ?? 0;
+        return rb.compareTo(ra);
+      });
+      final movieDoc = docs.first;
+      final movieData = {'id': movieDoc.id, ...movieDoc.data()};
+      final title = movieData['title'] as String? ?? '';
+
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('promo_dismissed_$title') == true) return;
+
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: true,
+        builder: (_) => _PromoPopup(movieData: movieData),
+      );
+    } catch (_) {
+      // Không chặn màn hình chính nếu lỗi mạng/query - pop-up chỉ là gợi ý phụ.
+    }
   }
 
   Future<void> _seedDatabaseIfNeeded() async {
@@ -454,7 +510,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         context: context,
         builder: (BuildContext dialogContext) {
           return AlertDialog(
-            backgroundColor: const Color(0xFF16161F),
+            backgroundColor: const Color(0xFF0A0A0A),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: const Row(
               children: [
@@ -557,6 +613,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           MaterialPageRoute(builder: (_) => const ProfileScreen()),
         );
         break;
+      case _BannerAction.voucher:
+        if (item.voucherCode != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Mã ${item.voucherCode} (Giảm 20K) đã được lưu vào khay nhớ tạm!'),
+              backgroundColor: const Color(0xFF00B0FF),
+            ),
+          );
+        }
+        break;
     }
   }
 
@@ -571,18 +637,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.amber,
-                borderRadius: BorderRadius.circular(6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/images/logo.png',
+                width: 32,
+                height: 32,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: Colors.amber,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  alignment: Alignment.center,
+                  child: const Text('S', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 16)),
+                ),
               ),
-              child: const Text('S', style: TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 14)),
             ),
             const SizedBox(width: 8),
             const Flexible(
@@ -594,7 +671,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             ),
           ],
         ),
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0A0A0A),
         elevation: 0,
         actions: [
           IconButton(
@@ -616,10 +693,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             },
           ),
           StreamBuilder<QuerySnapshot>(
-            stream: FirebaseFirestore.instance
-                .collection('user_notifications')
-                .where('isRead', isEqualTo: false)
-                .snapshots(),
+            stream: FirebaseAuth.instance.currentUser == null
+                ? const Stream.empty()
+                : FirebaseFirestore.instance
+                    .collection('notifications')
+                    .where('userEmail', isEqualTo: FirebaseAuth.instance.currentUser!.email)
+                    .where('isRead', isEqualTo: false)
+                    .snapshots(),
             builder: (context, snapshot) {
               final unreadCount = snapshot.hasData ? snapshot.data!.docs.length : 0;
               return Stack(
@@ -704,7 +784,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
                         prefixIcon: const Icon(Icons.search_rounded, color: Colors.white54, size: 20),
                         filled: true,
-                        fillColor: const Color(0xFF16161F),
+                        fillColor: const Color(0xFF0A0A0A),
                         contentPadding: const EdgeInsets.symmetric(vertical: 12),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                       ),
@@ -731,7 +811,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                                 margin: const EdgeInsets.symmetric(horizontal: 4),
                                 padding: const EdgeInsets.symmetric(horizontal: 16),
                                 decoration: BoxDecoration(
-                                  color: isSel ? Colors.amber : const Color(0xFF16161F),
+                                  color: isSel ? Colors.amber : const Color(0xFF0A0A0A),
                                   borderRadius: BorderRadius.circular(20),
                                   border: Border.all(color: isSel ? Colors.white : Colors.white.withValues(alpha: 0.04)),
                                 ),
@@ -793,162 +873,149 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       valueListenable: _searchQuery,
       builder: (_, search, __) => ValueListenableBuilder<String>(
         valueListenable: _selectedCategory,
-        builder: (_, category, __) => StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('movies').snapshots(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator(color: Colors.amber));
-            }
-
-            if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-              return const Center(child: Text('Không có phim nào khả dụng.', style: TextStyle(color: Colors.grey)));
-            }
-
-            final allMovies = snapshot.data!.docs;
-            final filteredMovies = allMovies.where((doc) {
-              final data = doc.data() as Map<String, dynamic>;
+        builder: (_, category, __) => ref.watch(moviesProvider).when(
+          data: (allMoviesList) {
+            final filteredMovies = allMoviesList.where((data) {
+              if (data['isDeleted'] == true) return false;
               final movieIsShowing = data['isShowingNow'] ?? true;
               if (movieIsShowing != isShowingNow) return false;
               final title = (data['title'] ?? '').toString().toLowerCase();
               final genre = (data['genre'] ?? '').toString().toLowerCase();
               final matchesSearch = title.contains(search.toLowerCase());
-              final matchesCategory = category == 'Tất cả' ||
-                  genre.contains(category.toLowerCase());
+              final matchesCategory = category == 'Tất cả' || genre.contains(category.toLowerCase());
               return matchesSearch && matchesCategory;
             }).toList();
 
-        if (filteredMovies.isEmpty) {
-          return const Center(child: Text('Không tìm thấy phim phù hợp.', style: TextStyle(color: Colors.grey)));
-        }
+            if (filteredMovies.isEmpty) {
+              return const Center(child: Text('Không tìm thấy phim phù hợp.', style: TextStyle(color: Colors.grey)));
+            }
 
-        final movies = filteredMovies;
+            return GridView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: filteredMovies.length,
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: 20,
+                crossAxisSpacing: 16,
+                childAspectRatio: 0.58,
+              ),
+              itemBuilder: (context, index) {
+                final movieData = filteredMovies[index];
+                final title = movieData['title'] ?? 'Phim không tên';
+                final genre = movieData['genre'] ?? 'Hành Động';
+                final rating = movieData['rating'] ?? '9.8';
+                final posterUrl = movieData['posterUrl'] ?? '';
 
-        return GridView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: movies.length,
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            mainAxisSpacing: 20,
-            crossAxisSpacing: 16,
-            childAspectRatio: 0.58,
-          ),
-          itemBuilder: (context, index) {
-            final movieData = movies[index].data() as Map<String, dynamic>;
-            final title = movieData['title'] ?? 'Phim không tên';
-            final genre = movieData['genre'] ?? 'Hành Động';
-            final rating = movieData['rating'] ?? '9.8';
-            final posterUrl = movieData['posterUrl'] ?? '';
-
-            return GestureDetector(
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => MovieDetailScreen(movieData: movieData)),
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => MovieDetailScreen(movieData: movieData)),
+                    );
+                  },
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A0A0A),
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 3))],
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: Hero(
+                                  tag: 'movie-poster-$title',
+                                  child: posterUrl.isNotEmpty
+                                      ? CachedNetworkImage(
+                                          imageUrl: posterUrl,
+                                          fit: BoxFit.cover,
+                                          placeholder: (context, url) => const Center(child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2)),
+                                          errorWidget: (context, url, error) => const Icon(Icons.movie, size: 50, color: Colors.white24),
+                                        )
+                                      : const Icon(Icons.movie, size: 50, color: Colors.white24),
+                                ),
+                              ),
+                              Positioned(
+                                top: 8,
+                                left: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(4)),
+                                  child: const Text('2D | SUB', style: TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.bold)),
+                                ),
+                              ),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                  decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.star_rounded, color: Colors.amber, size: 12),
+                                      const SizedBox(width: 2),
+                                      Text(rating, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.all(12.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                genre,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.grey, fontSize: 11),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton(
+                                  onPressed: () {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(builder: (context) => ShowtimeSelectionScreen(movieData: movieData)),
+                                    );
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.amber,
+                                    foregroundColor: Colors.black,
+                                    elevation: 0,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    padding: const EdgeInsets.symmetric(vertical: 8),
+                                  ),
+                                  child: const Text('Mua Vé', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
-              child: Container(
-                decoration: BoxDecoration(
-                  color: const Color(0xFF16161F),
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6, offset: const Offset(0, 3))],
-                ),
-                clipBehavior: Clip.antiAlias,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: Hero(
-                              tag: 'movie-poster-$title',
-                              child: posterUrl.isNotEmpty
-                                  ? CachedNetworkImage(
-                                      imageUrl: posterUrl,
-                                      fit: BoxFit.cover,
-                                      placeholder: (context, url) => const Center(child: CircularProgressIndicator(color: Colors.amber, strokeWidth: 2)),
-                                      errorWidget: (context, url, error) => const Icon(Icons.movie, size: 50, color: Colors.white24),
-                                    )
-                                  : const Icon(Icons.movie, size: 50, color: Colors.white24),
-                            ),
-                          ),
-                          Positioned(
-                            top: 8,
-                            left: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(color: Colors.orange, borderRadius: BorderRadius.circular(4)),
-                              child: const Text('2D | SUB', style: TextStyle(color: Colors.black, fontSize: 9, fontWeight: FontWeight.bold)),
-                            ),
-                          ),
-                          Positioned(
-                            top: 8,
-                            right: 8,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-                              child: Row(
-                                children: [
-                                  const Icon(Icons.star_rounded, color: Colors.amber, size: 12),
-                                  const SizedBox(width: 2),
-                                  Text(rating, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(12.0),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            genre,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.grey, fontSize: 11),
-                          ),
-                          const SizedBox(height: 10),
-                          SizedBox(
-                            width: double.infinity,
-                            child: ElevatedButton(
-                              onPressed: () {
-                                if (_checkLoginRequirement(context)) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(builder: (context) => ShowtimeSelectionScreen(movieData: movieData)),
-                                  );
-                                }
-                              },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber,
-                                foregroundColor: Colors.black,
-                                elevation: 0,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                padding: const EdgeInsets.symmetric(vertical: 8),
-                              ),
-                              child: const Text('Mua Vé', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             );
           },
-        );
-      },
+          loading: () => const Center(child: CircularProgressIndicator(color: Colors.amber)),
+          error: (_, __) => const SizedBox.shrink(),
         ),
       ),
     );
@@ -963,8 +1030,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [
-              const Color(0xFF16161F),
-              const Color(0xFF1E1E2F).withValues(alpha: 0.8),
+              const Color(0xFF0A0A0A),
+              const Color(0xFF121212).withValues(alpha: 0.8),
             ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -1048,21 +1115,16 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
         final tickets = ticketsSnapshot.data?.docs ?? [];
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance.collection('movies').snapshots(),
-          builder: (context, moviesSnapshot) {
-            if (moviesSnapshot.connectionState == ConnectionState.waiting) {
-              return const SizedBox(height: 10);
-            }
-
-            final allMovies = moviesSnapshot.data?.docs ?? [];
+        return ref.watch(moviesProvider).when(
+          data: (allMoviesList) {
+            final allMovies = allMoviesList.where((d) => d['isDeleted'] != true).toList();
             if (allMovies.isEmpty) return const SizedBox.shrink();
 
             if (tickets.isEmpty) {
-              final popularMovies = List<QueryDocumentSnapshot>.from(allMovies);
+              final popularMovies = List<Map<String, dynamic>>.from(allMovies);
               popularMovies.sort((a, b) {
-                final rA = double.tryParse((a.data() as Map<String, dynamic>)['rating'] ?? '0') ?? 0.0;
-                final rB = double.tryParse((b.data() as Map<String, dynamic>)['rating'] ?? '0') ?? 0.0;
+                final rA = double.tryParse(a['rating'] ?? '0') ?? 0.0;
+                final rB = double.tryParse(b['rating'] ?? '0') ?? 0.0;
                 return rB.compareTo(rA);
               });
 
@@ -1076,8 +1138,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
             }
 
             final Map<String, String> movieTitleToGenre = {};
-            for (var doc in allMovies) {
-              final data = doc.data() as Map<String, dynamic>;
+            for (var data in allMovies) {
               final title = data['title'] as String? ?? '';
               final genre = data['genre'] as String? ?? 'Hành Động';
               if (title.isNotEmpty) {
@@ -1109,16 +1170,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               }
             });
 
-            final List<QueryDocumentSnapshot> matchingMovies = [];
-            final List<QueryDocumentSnapshot> otherMovies = [];
+            final List<Map<String, dynamic>> matchingMovies = [];
+            final List<Map<String, dynamic>> otherMovies = [];
 
-            for (var doc in allMovies) {
-              final data = doc.data() as Map<String, dynamic>;
+            for (var data in allMovies) {
               final genre = (data['genre'] as String? ?? '').toLowerCase();
               if (genre.contains(favoriteGenre.toLowerCase())) {
-                matchingMovies.add(doc);
+                matchingMovies.add(data);
               } else {
-                otherMovies.add(doc);
+                otherMovies.add(data);
               }
             }
 
@@ -1127,8 +1187,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 .map((e) => e.toLowerCase().trim())
                 .toSet();
 
-            final unwatchedMatchingMovies = matchingMovies.where((doc) {
-              final title = ((doc.data() as Map<String, dynamic>)['title'] as String? ?? '').toLowerCase().trim();
+            final unwatchedMatchingMovies = matchingMovies.where((data) {
+              final title = (data['title'] as String? ?? '').toLowerCase().trim();
               return !watchedTitles.contains(title);
             }).toList();
 
@@ -1144,13 +1204,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               title: 'GỢI Ý CÁ NHÂN HÓA',
             );
           },
+          loading: () => const SizedBox.shrink(),
+          error: (_, __) => const SizedBox.shrink(),
         );
       },
     );
   }
 
   Widget _buildRecommendedListWidget({
-    required List<QueryDocumentSnapshot> movies,
+    required List<Map<String, dynamic>> movies,
     required String reason,
     required String title,
   }) {
@@ -1160,7 +1222,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF16161F).withValues(alpha: 0.4),
+        color: const Color(0xFF0A0A0A).withValues(alpha: 0.4),
         border: Border(
           bottom: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
           top: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
@@ -1228,7 +1290,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               padding: const EdgeInsets.symmetric(horizontal: 12),
               itemCount: movies.length,
               itemBuilder: (context, index) {
-                final movieData = movies[index].data() as Map<String, dynamic>;
+                final movieData = movies[index];
                 final title = movieData['title'] ?? 'Phim không tên';
                 final genre = movieData['genre'] ?? 'Hành Động';
                 final rating = movieData['rating'] ?? '9.8';
@@ -1245,7 +1307,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     width: 120,
                     margin: const EdgeInsets.symmetric(horizontal: 6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E1E26),
+                      color: const Color(0xFF121212),
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
@@ -1380,7 +1442,7 @@ class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
   @override
   Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
     return Container(
-      color: const Color(0xFF0F0F13),
+      color: const Color(0xFF000000),
       child: _tabBar,
     );
   }
@@ -1391,7 +1453,7 @@ class _SliverAppBarDelegate extends SliverPersistentHeaderDelegate {
   }
 }
 
-enum _BannerAction { movie, combo, profile }
+enum _BannerAction { movie, combo, profile, voucher }
 
 // ── Banner Carousel – widget độc lập, setState không lan lên HomeScreen ───────
 class _BannerCarousel extends StatefulWidget {
@@ -1537,6 +1599,7 @@ class _BannerItem {
   final String subtitle;
   final _BannerAction action;
   final String? movieTitle; // dùng khi action == movie
+  final String? voucherCode; // dùng khi action == voucher
 
   const _BannerItem({
     required this.imageUrl,
@@ -1546,5 +1609,178 @@ class _BannerItem {
     required this.subtitle,
     required this.action,
     this.movieTitle,
+    this.voucherCode,
   });
+}
+
+// ── Pop-up quảng bá phim đang chiếu ─────────────────────────────────────────
+class _PromoPopup extends StatefulWidget {
+  final Map<String, dynamic> movieData;
+  const _PromoPopup({required this.movieData});
+
+  @override
+  State<_PromoPopup> createState() => _PromoPopupState();
+}
+
+class _PromoPopupState extends State<_PromoPopup> {
+  bool _dontShowAgain = false;
+
+  Future<void> _close() async {
+    if (_dontShowAgain) {
+      final title = widget.movieData['title'] as String? ?? '';
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('promo_dismissed_$title', true);
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final title = widget.movieData['title'] as String? ?? 'Phim đang chiếu';
+    final genre = widget.movieData['genre'] as String? ?? '';
+    final posterUrl = widget.movieData['posterUrl'] as String? ?? '';
+    final rating = widget.movieData['rating']?.toString();
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F0F14),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: Colors.amber.withValues(alpha: 0.25)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                  child: AspectRatio(
+                    aspectRatio: 3 / 4,
+                    child: posterUrl.isEmpty
+                        ? Container(color: const Color(0xFF1E1E2A), child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 60))
+                        : CachedNetworkImage(
+                            imageUrl: posterUrl,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => Container(color: const Color(0xFF1E1E2A)),
+                            errorWidget: (_, __, ___) => Container(color: const Color(0xFF1E1E2A), child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 60)),
+                          ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: GestureDetector(
+                    onTap: _close,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(6)),
+                    child: const Text('ĐANG CHIẾU', style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      if (rating != null) ...[
+                        const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
+                        const SizedBox(width: 2),
+                        Text(rating, style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
+                        const SizedBox(width: 8),
+                      ],
+                      Expanded(
+                        child: Text(genre, style: const TextStyle(color: Colors.white54, fontSize: 12), overflow: TextOverflow.ellipsis),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: _dontShowAgain,
+                    onChanged: (v) => setState(() => _dontShowAgain = v ?? false),
+                    activeColor: Colors.amber,
+                    side: const BorderSide(color: Colors.white38),
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      onTap: () => setState(() => _dontShowAgain = !_dontShowAgain),
+                      child: const Text('Không hiển thị lại thông báo này', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: _close,
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.white24),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('Để sau', style: TextStyle(color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      onPressed: () async {
+                        final navigator = Navigator.of(context);
+                        if (_dontShowAgain) {
+                          final title2 = widget.movieData['title'] as String? ?? '';
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setBool('promo_dismissed_$title2', true);
+                        }
+                        if (!mounted) return;
+                        navigator.pop(); // đóng pop-up
+                        navigator.push(
+                          MaterialPageRoute(builder: (_) => ShowtimeSelectionScreen(movieData: widget.movieData)),
+                        );
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                      child: const Text('MUA NGAY', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

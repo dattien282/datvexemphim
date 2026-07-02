@@ -1,0 +1,135 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // =========================================================================
+    // HÀM KIỂM TRA QUYỀN (FUNCTIONS)
+    // =========================================================================
+    
+    // Kiểm tra đã đăng nhập chưa
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Lấy Role của User hiện tại từ collection `users`
+    // Lưu ý: get() tốn 1 lượt đọc Firestore cho mỗi lần đánh giá Rule. 
+    function getUserRole() {
+      return isAuthenticated() ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role : null;
+    }
+
+    // Các hàm kiểm tra role cụ thể
+    function isAdmin() {
+      return getUserRole() == 'admin';
+    }
+
+    function isTheaterManager() {
+      return getUserRole() == 'theater_manager';
+    }
+
+    function isStaff() {
+      return getUserRole() == 'staff';
+    }
+
+    // =========================================================================
+    // QUY TẮC CHO TỪNG COLLECTION
+    // =========================================================================
+
+    // 1. COLLECTION 'users'
+    match /users/{userId} {
+      // Đọc: User tự xem thông tin của mình. Admin, Manager, Staff có thể tìm/đọc tất cả để quản lý
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || isTheaterManager() || isStaff());
+      
+      // Tạo mới: Bất cứ ai đăng nhập đều được tạo document của chính mình (Đăng ký mới). 
+      // Nhưng chỉ được set role = 'user' và wallet_balance = 500000 (Khuyến mãi tân thủ)
+      allow create: if isAuthenticated() && request.auth.uid == userId 
+                    && request.resource.data.role == 'user'
+                    && request.resource.data.wallet_balance == 500000;
+                    
+      // Cập nhật (Update): Admin toàn quyền. User thường chỉ được update tên, số ĐT, ngày sinh, giới tính...
+      // TUYỆT ĐỐI KHÔNG cho User tự sửa số dư ví (wallet_balance) hay tự sửa quyền (role, isAdmin)
+      allow update: if isAuthenticated() && (
+        isAdmin() || 
+        (
+          request.auth.uid == userId 
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isAdmin', 'wallet_balance'])
+        )
+      );
+
+      // Xoá: Chỉ Admin được xoá
+      allow delete: if isAdmin();
+    }
+
+    // 2. COLLECTION 'movies' & 'showtimes' & 'theaters'
+    match /movies/{document=**} {
+      // Đọc: Ai cũng được đọc (Khách vãng lai cũng được xem phim)
+      allow read: if true;
+      // Ghi: Chỉ Admin và Theater Manager mới được sửa xoá
+      allow write: if isAdmin() || isTheaterManager();
+    }
+    
+    match /showtimes/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager();
+    }
+
+    // 3. COLLECTION 'vouchers' & 'promotions'
+    match /vouchers/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager();
+    }
+    match /promotions/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager();
+    }
+
+    // 4. COLLECTION 'temporary_locks' (Khoá ghế)
+    match /temporary_locks/{lockId} {
+      // Đọc: Ai cũng được đọc để biết ghế nào bị khoá
+      allow read: if true;
+      
+      // Tạo: User tự tạo khoá ghế cho mình
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // Sửa/Xoá: Chỉ người tạo ra khoá ghế đó mới được xoá (huỷ thanh toán)
+      // hoặc Admin/Backend sẽ tự dọn dẹp các khoá hết hạn
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    // 5. COLLECTION 'tickets' (Vé xem phim)
+    match /tickets/{ticketId} {
+      // Đọc: User xem vé của mình. Staff/Manager/Admin xem tất cả.
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff() || isTheaterManager() || isAdmin());
+      
+      // Tạo: User tự tạo vé (PENDING hoặc COMPLETED)
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      
+      // Cập nhật:
+      // - Staff cập nhật vé khi quét check-in (isUsed)
+      // - Admin toàn quyền
+      // - User không được tự update vé (phải qua backend để huỷ vé)
+      allow update: if isAuthenticated() && (isStaff() || isTheaterManager() || isAdmin());
+      
+      allow delete: if isAdmin();
+    }
+
+    // 6. COLLECTION 'notifications'
+    match /notifications/{notifId} {
+      // Đọc: Chỉ đọc thông báo gửi đến email của mình, hoặc thông báo toàn hệ thống (không có userEmail)
+      allow read: if isAuthenticated() && (!('userEmail' in resource.data) || resource.data.userEmail == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email || isAdmin());
+      
+      // Tạo: Admin hoặc người dùng tự gửi thông báo cho chính mình
+      allow create: if isAuthenticated();
+      
+      // Cập nhật: User được đánh dấu 'isRead' = true
+      allow update: if isAuthenticated() && (isAdmin() || (!('userEmail' in resource.data) || resource.data.userEmail == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.email));
+      
+      allow delete: if isAdmin();
+    }
+    
+    // Từ chối tất cả các hành động khác không được khai báo rõ
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,5 +1,9 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/constants.dart';
 import 'admin_audit_log.dart';
 
 /// Gửi thông báo tới toàn bộ user - trước đây admin không có cách nào báo
@@ -80,6 +84,29 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
         await batch.commit();
       }
 
+      // Gửi Push Notification (FCM) qua Backend
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final token = await user.getIdToken();
+        try {
+          final uri = Uri.parse('${AppConfig.paymentBackendUrl}/api/send-fcm');
+          await http.post(
+            uri,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $token',
+            },
+            body: jsonEncode({
+              'title': title,
+              'body': body,
+              'topic': 'all_users', // Gửi theo topic hoặc truyền tokens
+            }),
+          );
+        } catch (e) {
+          debugPrint('Lỗi gọi API FCM: $e');
+        }
+      }
+
       await logAdminAction(
         action: 'broadcast_notification',
         targetCollection: 'notifications',
@@ -89,7 +116,7 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã gửi thông báo tới $sent người dùng!'), backgroundColor: Colors.teal),
+          SnackBar(content: Text('Đã gửi thông báo tới $sent người dùng! (In-app + FCM)'), backgroundColor: Colors.teal),
         );
         _titleCtrl.clear();
         _bodyCtrl.clear();

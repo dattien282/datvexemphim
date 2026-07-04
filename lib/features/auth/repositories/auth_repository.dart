@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/constants.dart';
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(
@@ -79,11 +82,24 @@ class AuthRepository {
     return doc.data();
   }
 
+  // Nạp ví qua backend (Admin SDK) thay vì tự ghi 'wallet_balance' trực tiếp
+  // từ client - firestore.rules cấm tuyệt đối user tự sửa field này (chỉ
+  // admin mới sửa được), nên ghi thẳng qua Firestore SDK luôn bị
+  // permission-denied. Xem app.post('/topup-wallet') ở backend-payos/server.js.
   Future<void> topUpWallet(String uid, int amount) async {
-    await _firestore.collection('users').doc(uid).set(
-      {'wallet_balance': FieldValue.increment(amount)},
-      SetOptions(merge: true),
-    );
+    final idToken = await _auth.currentUser?.getIdToken();
+    final response = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/topup-wallet'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+      body: jsonEncode({'amount': amount}),
+    ).timeout(const Duration(seconds: 15));
+    final resData = jsonDecode(response.body);
+    if (resData['success'] != true) {
+      throw Exception(resData['message'] ?? 'Nạp tiền thất bại');
+    }
   }
 
   Future<void> resetPassword(String email) async {

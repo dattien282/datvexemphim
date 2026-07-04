@@ -8,6 +8,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { getAuth } = require('firebase-admin/auth');
+const { getMessaging } = require('firebase-admin/messaging');
 require('dotenv').config();
 
 const app = express();
@@ -92,6 +93,17 @@ function signTicket(ticketId, orderCode, paymentStatus) {
   return crypto.createHmac('sha256', TICKET_SIGNING_SECRET).update(payload).digest('hex');
 }
 
+// Cấu hình Cloudinary cho ảnh CCCD xác minh tuổi (age_verification_screen.dart).
+// CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET lấy từ Cloudinary Console > Dashboard
+// > Account Details, đặt trong backend-payos/.env - KHÔNG commit lên git.
+// Không dùng "unsigned upload preset" nữa (bất kỳ ai biết cloud name + preset
+// đều upload thẳng lên Cloudinary được, không cần đăng nhập app) - giờ client
+// phải xin chữ ký từ endpoint /cloudinary-sign (yêu cầu Firebase ID token hợp
+// lệ) trước khi được Cloudinary chấp nhận upload.
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'g9u2mtmv';
+const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || '';
+const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || '';
+
 // Xác thực Firebase ID token gửi qua header Authorization: Bearer <token>,
 // gắn req.staffUid + req.staffRole (đọc từ users/{uid}.role) nếu hợp lệ.
 async function requireStaffAuth(req, res, next) {
@@ -144,18 +156,6 @@ async function requireAuth(req, res, next) {
 app.get('/', (req, res) => {
   res.send('✅ Stella Cinema PayOS Backend is running!');
 });
-
-// Bảng giá combo - phải khớp với _combos trong
-// lib/features/booking_and_payment/screens/combo_selection_screen.dart.
-// Dùng để tính lại tiền combo ở server thay vì tin số client gửi lên.
-const COMBO_PRICES = {
-  solo: 75000,
-  couple: 110000,
-  premium: 160000,
-  popcorn_sweet: 35000,
-  popcorn_cheese: 45000,
-  pepsi: 30000,
-};
 
 // Layout phòng mặc định - phải khớp với seat_booking_screen.dart khi chưa
 // tìm thấy room doc thật (showtime cũ/dự phòng chưa gắn phòng cụ thể).
@@ -285,13 +285,26 @@ async function computeAuthoritativeAmount(ticketData) {
     seatSubtotal += seatPrice(String(seatId), priceStandard, priceVip, rows, weekendSur, timeSur);
   }
 
-  // 2. Combo: chỉ cộng theo bảng giá server, bỏ qua 'price' client tự gửi.
+  // 2. Combo: tra giá + phạm vi rạp thật từ chính document Firestore
+  // 'combos/{id}' theo id - trước đây dùng 1 bảng giá cứng (COMBO_PRICES)
+  // không còn khớp với hệ thống combo theo rạp hiện tại (mỗi rạp có thể có
+  // combo/giá riêng, xem combo_selection_screen.dart), và client cũng chưa
+  // từng gửi field 'id' khớp với bảng đó - khiến MỌI đơn có combo đều bị từ
+  // chối với lỗi "Combo không hợp lệ".
   let comboSubtotal = 0;
   for (const c of combos) {
-    const unitPrice = COMBO_PRICES[c.id];
-    if (unitPrice == null) {
+    if (!c.id) {
+      throw { status: 400, message: 'Combo không hợp lệ: thiếu id' };
+    }
+    const comboDoc = await firestore.collection('combos').doc(String(c.id)).get();
+    if (!comboDoc.exists) {
       throw { status: 400, message: `Combo không hợp lệ: ${c.id}` };
     }
+    const comboScope = comboDoc.data().theaterName;
+    if (comboScope !== 'ALL' && comboScope !== theaterName) {
+      throw { status: 400, message: `Combo không áp dụng cho rạp này: ${c.id}` };
+    }
+    const unitPrice = Number(comboDoc.data().price) || 0;
     comboSubtotal += unitPrice * (Number(c.quantity) || 0);
   }
 
@@ -340,8 +353,53 @@ async function computeAuthoritativeAmount(ticketData) {
     autoDiscount = Math.round((subtotal * autoPct) / 100);
   }
 
-  const finalAmount = Math.max(0, subtotal - voucherDiscount - autoDiscount);
-  return { finalAmount, subtotal, voucherDiscount, autoDiscount };
+  // 5. Điểm thành viên (loyalty points) - 1 điểm = 100đ, phải khớp
+  // _loyaltyDiscountAmount ở payment_screen.dart. Trước đây server hoàn toàn
+  // bỏ qua usedLoyaltyPoints khi tính finalAmount: client trừ điểm vào ví/
+  // điểm nhưng vẫn bị tính đủ tiền gốc, mất điểm miễn phí không đổi được gì.
+  // Số điểm dùng được lấy từ chính hồ sơ user tại thời điểm thanh toán (không
+  // tin số ticketData.usedLoyaltyPoints vượt quá số điểm thật đang có), rồi
+  // ghim (clamp) lại để không thể tạo ra loyaltyDiscount lớn hơn số điểm thật.
+  let usedLoyaltyPoints = 0;
+  if (ticketData.userId) {
+    const requestedPoints = Number(ticketData.usedLoyaltyPoints) || 0;
+    if (requestedPoints > 0) {
+      const userSnap = await firestore.collection('users').doc(ticketData.userId).get();
+      const currentPoints = Number(userSnap.data()?.loyalty_points) || 0;
+      usedLoyaltyPoints = Math.min(requestedPoints, currentPoints);
+    }
+  }
+  const loyaltyDiscount = usedLoyaltyPoints * 100;
+
+  // Voucher KHÔNG cộng dồn với giảm giá tự động (thành viên + Happy Wednesday)
+  // - khớp _promoDiscount ở payment_screen.dart. Trước đây server cộng cả
+  // voucherDiscount VÀ autoDiscount, cho phép 1 đơn vừa dùng mã giảm giá vừa
+  // hưởng ưu đãi thành viên/Thứ 4 cùng lúc, không giới hạn mức giảm tổng.
+  const promoDiscount = Math.max(voucherDiscount, autoDiscount);
+
+  const finalAmount = Math.max(0, subtotal - promoDiscount - loyaltyDiscount);
+  return { finalAmount, subtotal, voucherDiscount, autoDiscount, promoDiscount, loyaltyDiscount, usedLoyaltyPoints };
+}
+
+// Tăng currentUses của voucher TRONG transaction đang chạy (tx), thay vì rời
+// rạc từ client SAU KHI thanh toán xong (trước đây _incrementVoucherUsageIfApplied
+// ở payment_screen.dart dùng update() thường, không transaction, lỗi bị nuốt
+// im lặng) - đóng race condition: nhiều người dùng cùng lúc áp 1 mã "còn 1
+// lượt" trước đây có thể đều tăng được currentUses vượt maxUses.
+// strict=true (thanh toán ví, tiền CHƯA bị trừ) - có thể từ chối giao dịch
+// nếu vừa hết lượt ngay lúc commit. strict=false (webhook PayOS, tiền ĐÃ được
+// PayOS thu) - không thể huỷ giao dịch đã thu tiền, chỉ tăng đếm best-effort.
+async function bumpVoucherUsage(tx, voucherCode, { strict }) {
+  if (!voucherCode) return true;
+  const voucherRef = firestore.collection('vouchers').doc(voucherCode);
+  const voucherSnap = await tx.get(voucherRef);
+  if (!voucherSnap.exists) return true;
+  const v = voucherSnap.data();
+  const maxUses = Number(v.maxUses) || 0;
+  const currentUses = Number(v.currentUses) || 0;
+  if (strict && maxUses > 0 && currentUses >= maxUses) return false;
+  tx.update(voucherRef, { currentUses: currentUses + 1 });
+  return true;
 }
 
 // 1. API: Tạo link thanh toán. Client gửi ticketId (vé PENDING đã tạo sẵn)
@@ -379,7 +437,7 @@ app.post('/create-payment-link', requireAuth, async (req, res) => {
       return res.status(403).json({ error: -1, message: 'Phim này giới hạn 18+. Cần xác minh độ tuổi trước khi thanh toán.', data: null });
     }
 
-    const { finalAmount } = await computeAuthoritativeAmount(ticketData);
+    const { finalAmount, usedLoyaltyPoints } = await computeAuthoritativeAmount(ticketData);
     if (finalAmount <= 0) {
       return res.status(400).json({ error: -1, message: 'Số tiền thanh toán không hợp lệ', data: null });
     }
@@ -399,9 +457,11 @@ app.post('/create-payment-link', requireAuth, async (req, res) => {
 
     const paymentLinkRes = await payos.paymentRequests.create(requestData);
 
-    // Ghi orderCode PayOS thật vào vé để webhook đối chiếu đúng, và ghi lại
-    // finalAmount server tính để có dấu vết đối soát sau này.
-    await ticketRef.update({ orderCode, totalAmount: finalAmount });
+    // Ghi orderCode PayOS thật vào vé để webhook đối chiếu đúng, ghi lại
+    // finalAmount server tính để có dấu vết đối soát sau này, và ghim lại
+    // usedLoyaltyPoints đã được clamp theo số điểm thật (không phải số client
+    // gửi) để webhook trừ/cộng điểm đúng khi thanh toán PayOS hoàn tất.
+    await ticketRef.update({ orderCode, totalAmount: finalAmount, usedLoyaltyPoints, earnedLoyaltyPoints: Math.floor(finalAmount / 1000) });
 
     return res.status(200).json({
       error: 0,
@@ -428,6 +488,191 @@ app.post('/create-payment-link', requireAuth, async (req, res) => {
       data: null
     });
   }
+});
+
+// 1b. API: Thanh toán bằng Ví Stella Wallet. Trước đây payment_service.dart
+// (Flutter) tự trừ 'wallet_balance' trực tiếp từ app bằng client SDK - vi
+// phạm rule firestore.rules collection 'users' ("TUYỆT ĐỐI KHÔNG cho User tự
+// sửa số dư ví"), nên luôn bị Firestore từ chối (permission-denied) một khi
+// rules được deploy đúng. Giờ đi qua Admin SDK ở server (bỏ qua rules) đúng
+// pattern đã có sẵn ở /cancel-ticket (hoàn tiền cũng dùng Admin SDK), và tính
+// lại authoritative amount giống /create-payment-link thay vì tin
+// totalAmount client tự tính - khớp nguyên tắc "không tin giá client gửi"
+// của computeAuthoritativeAmount(). Client gọi API này SAU KHI đã tạo vé
+// PENDING (paymentMethod 'wallet') qua Firestore transaction (đặt trước ghế
+// atomic) - xem executeWalletPayment() trong payment_service.dart.
+app.post('/pay-wallet', requireAuth, async (req, res) => {
+  if (!firestore) {
+    return res.status(503).json({ error: -1, message: 'Server chưa cấu hình Firebase Admin SDK', data: null });
+  }
+  try {
+    const { ticketId } = req.body;
+    if (!ticketId) {
+      return res.status(400).json({ error: -1, message: 'Thiếu ticketId', data: null });
+    }
+
+    const ticketRef = firestore.collection('tickets').doc(ticketId);
+    const ticketDoc = await ticketRef.get();
+    if (!ticketDoc.exists) {
+      return res.status(404).json({ error: -1, message: 'Vé không tồn tại', data: null });
+    }
+    const ticketData = ticketDoc.data();
+    if (ticketData.userId !== req.userUid) {
+      return res.status(403).json({ error: -1, message: 'Bạn không có quyền thanh toán vé này', data: null });
+    }
+    if (ticketData.paymentStatus !== 'PENDING') {
+      return res.status(400).json({ error: -1, message: `Vé đang ở trạng thái không hợp lệ để thanh toán: ${ticketData.paymentStatus}`, data: null });
+    }
+
+    const ageOk = await checkAgeRestriction(ticketData);
+    if (!ageOk) {
+      return res.status(403).json({ error: -1, message: 'Phim này giới hạn 18+. Cần xác minh độ tuổi trước khi thanh toán.', data: null });
+    }
+
+    const { finalAmount, usedLoyaltyPoints } = await computeAuthoritativeAmount(ticketData);
+    if (finalAmount <= 0 && usedLoyaltyPoints <= 0) {
+      return res.status(400).json({ error: -1, message: 'Số tiền thanh toán không hợp lệ', data: null });
+    }
+
+    const userRef = firestore.collection('users').doc(req.userUid);
+
+    const result = await firestore.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const balance = Number(userSnap.data()?.wallet_balance) || 0;
+      const currentPoints = Number(userSnap.data()?.loyalty_points) || 0;
+
+      if (balance < finalAmount) return 'INSUFFICIENT_BALANCE';
+      if (usedLoyaltyPoints > 0 && currentPoints < usedLoyaltyPoints) return 'INSUFFICIENT_BALANCE';
+
+      const voucherOk = await bumpVoucherUsage(tx, ticketData.voucherCode, { strict: true });
+      if (!voucherOk) return 'VOUCHER_EXHAUSTED';
+
+      const earnedPoints = Math.floor(finalAmount / 1000);
+      tx.update(userRef, {
+        wallet_balance: balance - finalAmount,
+        loyalty_points: (currentPoints - usedLoyaltyPoints) + earnedPoints,
+      });
+      tx.update(ticketRef, {
+        paymentStatus: 'COMPLETED',
+        totalAmount: finalAmount,
+        earnedLoyaltyPoints: earnedPoints,
+        paidAt: Timestamp.now(),
+      });
+      return 'OK';
+    });
+
+    if (result === 'INSUFFICIENT_BALANCE') {
+      return res.status(400).json({ error: -1, message: 'INSUFFICIENT_BALANCE', data: null });
+    }
+    if (result === 'VOUCHER_EXHAUSTED') {
+      return res.status(400).json({ error: -1, message: 'Mã giảm giá vừa hết lượt sử dụng, vui lòng bỏ mã và thử lại', data: null });
+    }
+
+    return res.status(200).json({ error: 0, message: 'Success', data: { finalAmount } });
+  } catch (error) {
+    if (error && error.status) {
+      return res.status(error.status).json({ error: -1, message: error.message, data: null });
+    }
+    console.error('Error processing wallet payment:', error);
+    return res.status(500).json({ error: -1, message: 'Failed to process wallet payment', data: null });
+  }
+});
+
+// 1c. API: Nạp tiền vào Ví Stella Wallet. Trước đây client tự ghi
+// 'wallet_balance' trực tiếp qua Firestore SDK (auth_repository.dart
+// topUpWallet) - luôn bị firestore.rules từ chối (permission-denied) một khi
+// rule "TUYỆT ĐỐI KHÔNG cho User tự sửa số dư ví" được deploy đúng, nên tính
+// năng nạp ví hỏng hoàn toàn. Đi qua Admin SDK ở server giống /pay-wallet.
+app.post('/topup-wallet', requireAuth, async (req, res) => {
+  if (!firestore) {
+    return res.status(503).json({ success: false, message: 'Server chưa cấu hình Firebase Admin SDK' });
+  }
+  try {
+    const amount = Number(req.body.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Số tiền nạp không hợp lệ' });
+    }
+    const userRef = firestore.collection('users').doc(req.userUid);
+    await userRef.set({ wallet_balance: FieldValue.increment(amount) }, { merge: true });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Lỗi khi nạp ví:', error.message);
+    return res.status(500).json({ success: false, message: 'Lỗi máy chủ' });
+  }
+});
+
+// 1d. API: Huỷ vé PENDING chưa thanh toán được (rollback khi /pay-wallet hoặc
+// /create-payment-link báo lỗi). Trước đây payment_service.dart tự gọi
+// ticketRef.delete() từ client, nhưng firestore.rules chỉ cho phép
+// isAdmin() xoá vé - rollback luôn bị permission-denied, để lại vé PENDING
+// rác và ghế bị giữ vĩnh viễn trong showtime_seat_status. Khác /cancel-ticket
+// (dành cho vé đã thanh toán, có hoàn tiền) - vé PENDING ở đây chưa từng được
+// thanh toán thành công nên không hoàn tiền, chỉ xoá vé + nhả ghế.
+app.post('/discard-pending-ticket', requireAuth, async (req, res) => {
+  if (!firestore) {
+    return res.status(503).json({ success: false, message: 'Server chưa cấu hình Firebase Admin SDK' });
+  }
+  const { ticketId } = req.body;
+  if (!ticketId) {
+    return res.status(400).json({ success: false, message: 'Thiếu ticketId' });
+  }
+  try {
+    const ticketRef = firestore.collection('tickets').doc(ticketId);
+    await firestore.runTransaction(async (tx) => {
+      const ticketDoc = await tx.get(ticketRef);
+      if (!ticketDoc.exists) return;
+      const data = ticketDoc.data();
+      if (data.userId !== req.userUid) {
+        throw { status: 403, message: 'Bạn không có quyền huỷ vé này' };
+      }
+      if (data.paymentStatus !== 'PENDING') {
+        throw { status: 400, message: 'Chỉ có thể huỷ vé đang ở trạng thái PENDING' };
+      }
+      if (data.showtimeId && Array.isArray(data.seats) && data.seats.length > 0) {
+        const statusRef = firestore.collection('showtime_seat_status').doc(data.showtimeId);
+        tx.set(statusRef, { bookedSeatIds: FieldValue.arrayRemove(data.seats) }, { merge: true });
+      }
+      tx.delete(ticketRef);
+    });
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    if (error && error.status) {
+      return res.status(error.status).json({ success: false, message: error.message });
+    }
+    console.error('Lỗi khi discard-pending-ticket:', error.message);
+    return res.status(500).json({ success: false, message: 'Lỗi máy chủ' });
+  }
+});
+
+// 1e. API: Cấp chữ ký để client upload ảnh CCCD thẳng lên Cloudinary (signed
+// upload) - xem age_verification_screen.dart. Trước đây dùng "unsigned upload
+// preset": bất kỳ ai biết cloud name + preset (hardcode sẵn trong app, trích
+// xuất được bằng cách decompile) đều upload thẳng lên Cloudinary mà không cần
+// đăng nhập. Giờ bắt buộc có Firebase ID token hợp lệ mới lấy được chữ ký, và
+// public_id là uid + UUID ngẫu nhiên (không đoán được) nên URL ảnh trả về khó
+// bị dò ra dù vẫn là loại 'upload' công khai - cùng mức bảo mật với download
+// URL có token của Firebase Storage trước đây.
+app.post('/cloudinary-sign', requireAuth, (req, res) => {
+  if (!CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
+    return res.status(503).json({ success: false, message: 'Server chưa cấu hình CLOUDINARY_API_KEY/CLOUDINARY_API_SECRET' });
+  }
+  const timestamp = Math.floor(Date.now() / 1000);
+  const kind = req.body.kind === 'back' ? 'back' : 'front';
+  const publicId = `age_verification/${req.userUid}/${kind}_${crypto.randomUUID()}`;
+
+  // Cloudinary yêu cầu ký đúng các tham số sẽ gửi kèm (trừ file, api_key,
+  // cloud_name, resource_type), sắp xếp theo alphabet: "key=value&key=value...".
+  const stringToSign = `public_id=${publicId}&timestamp=${timestamp}${CLOUDINARY_API_SECRET}`;
+  const signature = crypto.createHash('sha1').update(stringToSign).digest('hex');
+
+  return res.status(200).json({
+    success: true,
+    cloudName: CLOUDINARY_CLOUD_NAME,
+    apiKey: CLOUDINARY_API_KEY,
+    timestamp,
+    publicId,
+    signature,
+  });
 });
 
 // 2. API: Nhận Webhook từ PayOS khi thanh toán thành công
@@ -464,10 +709,37 @@ app.post('/payos-webhook', async (req, res) => {
     const ticketData = ticketDoc.data();
     const qrSignature = signTicket(ticketDoc.id, ticketData.orderCode, 'COMPLETED');
 
-    await ticketDoc.ref.update({
-      paymentStatus: 'COMPLETED',
-      paidAt: Timestamp.now(),
-      qrSignature,
+    // Cộng/trừ điểm thành viên thật cho vé thanh toán bằng PayOS/ngân hàng -
+    // trước đây webhook chỉ đổi paymentStatus, không hề đụng tới
+    // users/{uid}.loyalty_points, nên usedLoyaltyPoints ghi trên vé không bao
+    // giờ thực sự bị trừ và earnedLoyaltyPoints không bao giờ được cộng, dù vé
+    // hiển thị như thể điểm đã được xử lý. Gộp trong 1 transaction với việc
+    // cập nhật vé để tránh nửa vời nếu lỗi giữa chừng.
+    await firestore.runTransaction(async (tx) => {
+      const freshTicketSnap = await tx.get(ticketDoc.ref);
+      if (!freshTicketSnap.exists || freshTicketSnap.data().paymentStatus === 'COMPLETED') return;
+
+      if (ticketData.userId) {
+        const userRef = firestore.collection('users').doc(ticketData.userId);
+        const userSnap = await tx.get(userRef);
+        if (userSnap.exists) {
+          const currentPoints = Number(userSnap.data()?.loyalty_points) || 0;
+          const usedLoyaltyPoints = Math.min(Number(ticketData.usedLoyaltyPoints) || 0, currentPoints);
+          const earnedPoints = Number(ticketData.earnedLoyaltyPoints) || 0;
+          tx.update(userRef, { loyalty_points: currentPoints - usedLoyaltyPoints + earnedPoints });
+        }
+      }
+
+      // PayOS đã thu tiền thật rồi (không thể huỷ giao dịch ở bước này), nên
+      // strict=false: chỉ tăng đếm best-effort, không chặn hoàn tất vé dù mã
+      // vừa hết lượt đúng lúc này.
+      await bumpVoucherUsage(tx, ticketData.voucherCode, { strict: false });
+
+      tx.update(ticketDoc.ref, {
+        paymentStatus: 'COMPLETED',
+        paidAt: Timestamp.now(),
+        qrSignature,
+      });
     });
     console.log(`Đã cập nhật vé ${ticketDoc.id} thành COMPLETED và ký QR.`);
 
@@ -736,6 +1008,15 @@ app.post('/cancel-ticket', requireAuth, async (req, res) => {
       if (refundAmount > 0) {
         tx.update(userRef, { wallet_balance: FieldValue.increment(refundAmount) });
       }
+      // Nhả ghế đã đặt trước trong showtime_seat_status (xem
+      // lib/features/booking_and_payment/services/seat_reservation_service.dart)
+      // - nếu không làm bước này, ghế của vé đã hủy sẽ bị kẹt vĩnh viễn trong
+      // lớp check atomic mới dù vé đã CANCELLED. Dùng set+merge (không phải
+      // update) vì tài liệu showtime_seat_status có thể chưa tồn tại với vé cũ.
+      if (data.showtimeId && Array.isArray(data.seats) && data.seats.length > 0) {
+        const statusRef = firestore.collection('showtime_seat_status').doc(data.showtimeId);
+        tx.set(statusRef, { bookedSeatIds: FieldValue.arrayRemove(data.seats) }, { merge: true });
+      }
 
       return { refundAmount, movieTitle: data.movieTitle || '' };
     });
@@ -762,6 +1043,52 @@ app.post('/cancel-ticket', requireAuth, async (req, res) => {
     }
     console.error('Lỗi khi hủy vé:', error.message);
     return res.status(500).json({ success: false, message: 'Lỗi máy chủ' });
+  }
+});
+
+// API gửi Push Notification qua FCM
+app.post('/api/send-fcm', requireAuth, async (req, res) => {
+  if (!firestore) {
+    return res.status(503).json({ success: false, message: 'Server chưa cấu hình Firebase Admin SDK' });
+  }
+  
+  // Xác thực quyền admin hoặc marketing (nếu áp dụng rbac sau này)
+  try {
+    const userDoc = await firestore.collection('users').doc(req.user.uid).get();
+    if (!userDoc.exists) return res.status(403).json({ success: false, message: 'Không tìm thấy user' });
+    const userData = userDoc.data();
+    if (userData.role !== 'admin' && userData.role !== 'marketing' && userData.isAdmin !== true) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền gửi broadcast' });
+    }
+
+    const { title, body, topic, tokens } = req.body;
+    if (!title || !body) {
+      return res.status(400).json({ success: false, message: 'Thiếu title hoặc body' });
+    }
+
+    const messagePayload = {
+      notification: {
+        title,
+        body,
+      },
+      data: {
+        click_action: 'FLUTTER_NOTIFICATION_CLICK',
+      }
+    };
+
+    let response;
+    if (topic) {
+      response = await getMessaging().send({ ...messagePayload, topic });
+    } else if (tokens && Array.isArray(tokens) && tokens.length > 0) {
+      response = await getMessaging().sendEachForMulticast({ ...messagePayload, tokens });
+    } else {
+      return res.status(400).json({ success: false, message: 'Thiếu topic hoặc tokens' });
+    }
+
+    return res.json({ success: true, data: response });
+  } catch (error) {
+    console.error('Lỗi send FCM:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

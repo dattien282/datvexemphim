@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../theater_manager/screens/room_management_screen.dart' show roomFormatColor;
+import '../../theater_manager/screens/room_management_screen.dart' show kPremiumRoomFormats;
+import '../../theater_manager/widgets/seat_grid_widget.dart';
+import '../../../models/room_layout.dart';
+import '../../../models/showtime.dart';
+import '../services/pricing_service.dart';
 import 'combo_selection_screen.dart';
 
 class SeatBookingScreen extends StatefulWidget {
@@ -16,41 +20,54 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   final List<String> _selectedSeats = [];
   int _totalPrice = 0;
 
-  // Sơ đồ phòng mặc định (khớp layout cũ trước khi có mô hình phòng theo
-  // rạp): 3 hàng Thường + 5 hàng VIP + 2 hàng Sweetbox, 10 ghế/hàng.
-  int _standardRows = 3;
-  int _vipRows = 5;
-  int _sweetboxRows = 2;
-  int _seatsPerRow = 10;
-  // Định dạng phòng (2D Phụ đề/2D Lồng tiếng/VIP/Premium/GoldClass/L'amour).
-  // GoldClass tái dùng field 'vipRows' để vẽ toàn ghế đơn cỡ lớn (không ghế
-  // đôi); L'amour tái dùng 'sweetboxRows' để vẽ toàn ghế đôi - xem
-  // room_management_screen.dart _applyFormatPreset để hiểu quy ước này.
-  String? _roomFormat;
-  bool get _isGoldClass => _roomFormat == 'GoldClass';
-  bool get _isLamour => _roomFormat == "L'amour";
-  // Ghế do staff đánh dấu hỏng/bảo trì tạm thời (staff_seat_maintenance_screen.dart)
-  // - coi như "đã bán" để khách không chọn được, tới khi staff gỡ đánh dấu.
-  Set<String> _brokenSeats = {};
-
-  List<String> get _standardVipRowLabels =>
-      List.generate(_standardRows + _vipRows, (i) => String.fromCharCode('A'.codeUnitAt(0) + i));
-  List<String> get _vipRowLabels => _standardVipRowLabels.sublist(_standardRows);
-  List<String> get _sweetboxRowLabels => List.generate(
-      _sweetboxRows, (i) => String.fromCharCode('A'.codeUnitAt(0) + _standardRows + _vipRows + i));
+  // Sơ đồ + định dạng phòng, tải lại từ collection 'rooms' trong _loadRoomLayout.
+  // Mặc định khớp layout cũ trước khi có mô hình phòng theo rạp: 3 hàng
+  // Thường + 5 hàng VIP + 2 hàng Sweetbox, 10 ghế/hàng.
+  RoomLayout _layout = const RoomLayout(theaterName: '', roomName: '', roomFormat: 'Standard');
+  String? get _roomFormat => _layout.roomFormat;
+  bool get _isGoldClass => _layout.isGoldClass;
+  bool get _isLamour => _layout.isLamour;
 
   @override
   void initState() {
     super.initState();
-    _roomFormat = widget.movieData['roomFormat'] as String?;
+    final initialFormat = widget.movieData['roomFormat'] as String?;
+    if (initialFormat != null) {
+      _layout = RoomLayout(
+        theaterName: '',
+        roomName: '',
+        roomFormat: initialFormat,
+        seatLayoutKind: seatLayoutKindForFormat(initialFormat),
+      );
+    }
     _loadRoomLayout();
   }
+
+  String _theaterSize = 'Medium';
+
 
   Future<void> _loadRoomLayout() async {
     final theater = widget.movieData['selectedTheater'];
     final roomName = widget.movieData['roomName'];
-    if (theater == null || roomName == null) return; // dùng layout mặc định
+    if (theater == null) return;
+    
     try {
+      // 1. Fetch theater size for pricing
+      final theaterSnap = await FirebaseFirestore.instance
+          .collection('theaters')
+          .where('name', isEqualTo: theater)
+          .limit(1)
+          .get();
+      
+      if (theaterSnap.docs.isNotEmpty && mounted) {
+        setState(() {
+          _theaterSize = theaterSnap.docs.first.data()['size'] as String? ?? 'Medium';
+        });
+      }
+
+      if (roomName == null) return;
+
+      // 2. Fetch room layout
       final snap = await FirebaseFirestore.instance
           .collection('rooms')
           .where('theaterName', isEqualTo: theater)
@@ -58,47 +75,79 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
           .limit(1)
           .get();
       if (snap.docs.isEmpty || !mounted) return;
-      final d = snap.docs.first.data();
+      final roomDoc = snap.docs.first;
       setState(() {
-        _standardRows = (d['standardRows'] as num? ?? 3).toInt();
-        _vipRows = (d['vipRows'] as num? ?? 5).toInt();
-        _sweetboxRows = (d['sweetboxRows'] as num? ?? 2).toInt();
-        _seatsPerRow = (d['seatsPerRow'] as num? ?? 10).toInt();
-        _roomFormat = (d['roomFormat'] as String?) ?? _roomFormat;
-        _brokenSeats = ((d['brokenSeats'] as List?) ?? []).map((e) => e.toString()).toSet();
+        _layout = RoomLayout.fromMap(roomDoc.id, roomDoc.data());
       });
     } catch (_) {
       // giữ layout mặc định nếu lỗi mạng/không tìm thấy phòng
     }
   }
 
-  bool _isWeekend() {
-    final dateStr = (widget.movieData['selectedDate'] ?? '').toString();
-    return dateStr.contains('Chủ Nhật') ||
-        dateStr.contains('Thứ Bảy') ||
-        dateStr.contains('13/06') ||
-        dateStr.contains('14/06');
+  // Thời điểm chiếu thật của suất đã chọn: ưu tiên 'showAt' (millis, do
+  // showtime_selection_screen.dart truyền qua từ Showtime thật) - fallback
+  // parse chuỗi 'selectedDate'/'selectedTime' cho luồng cũ/demo không có
+  // showtimeId thật (widget.movieData['showtimeId'] == null).
+  DateTime? get _showAtDateTime {
+    final raw = widget.movieData['showAt'];
+    if (raw is int) return DateTime.fromMillisecondsSinceEpoch(raw);
+    return Showtime.parseLegacyDateTime(
+      widget.movieData['selectedDate']?.toString(),
+      widget.movieData['selectedTime']?.toString(),
+    );
   }
 
-  int _getTimeSurcharge() {
-    final timeStr = (widget.movieData['selectedTime'] ?? '').toString();
-    if (timeStr.isEmpty) return 0;
-    try {
-      final hourStr = timeStr.split(':')[0];
-      final hour = int.parse(hourStr);
-      if (hour < 12) {
-        return -10000; // Giảm giá suất sớm
-      } else if (hour >= 22) {
-        return 10000; // Phụ thu suất khuya
-      }
-    } catch (_) {}
-    return 0;
+  ShowtimeSurcharge? get _surcharge {
+    final showAt = _showAtDateTime;
+    if (showAt == null) return null;
+    return ShowtimeSurcharge.fromShowAt(showAt, sessionType: widget.movieData['sessionType'] as String?);
   }
 
-  // Giá STD/VIP thật do theater_manager đặt cho suất chiếu này (nếu có
-  // showtimeId), dùng chung cho cả sơ đồ giá, chú thích và bảng phân tích.
-  int get _standardBasePrice => (widget.movieData['priceStandard'] as num?)?.toInt() ?? 90000;
-  int get _vipBasePrice => (widget.movieData['priceVip'] as num?)?.toInt() ?? 120000;
+  bool get _hasRealShowtime => widget.movieData['showtimeId'] != null;
+
+  // Phòng cao cấp trở lên (Premium/GoldClass/L'amour/IMAX/4DX/ScreenX) đã ở
+  // phân khúc giá cao, nên không cộng thêm ưu đãi Thứ 4 vào giá vé của các
+  // phòng này (khác với discount_service.dart giảm % trên tổng hóa đơn - đó
+  // là ưu đãi "Happy Wednesday" theo NGÀY ĐẶT VÉ, còn ưu đãi ở đây theo NGÀY
+  // SUẤT CHIẾU, 2 khái niệm khác nhau, cố tình không gộp làm một).
+  bool get _isPremiumFormat => kPremiumRoomFormats.contains(_roomFormat);
+  bool get _wednesdayDiscountApplies => (_surcharge?.isWednesday ?? false) && !_isPremiumFormat;
+
+  int get _standardPriceFromTheaterSize {
+    switch (_theaterSize) {
+      case 'Large': return 90000;
+      case 'Small': return 50000;
+      case 'Medium':
+      default: return 70000;
+    }
+  }
+
+  int get _vipPriceFromTheaterSize {
+    switch (_theaterSize) {
+      case 'Large': return 150000;
+      case 'Small': return 90000;
+      case 'Medium':
+      default: return 120000;
+    }
+  }
+
+  // Giá STD/VIP: khi có suất chiếu thật (showtimeId), dùng đúng giá
+  // priceStandard/priceVip theater_manager đã cấu hình cho suất này làm giá
+  // gốc - trước đây phần này bị bỏ qua hoàn toàn, giá luôn tính lại từ theater
+  // size + định dạng phòng nên giá staff cấu hình không có tác dụng gì. Chỉ
+  // khi KHÔNG có suất chiếu thật (luồng cũ/demo) mới dùng công thức theater
+  // size + phụ thu 30% cho phòng cao cấp làm phương án dự phòng.
+  int get _standardBasePrice {
+    if (_wednesdayDiscountApplies) return 50000;
+    if (_hasRealShowtime) return (widget.movieData['priceStandard'] as num?)?.toInt() ?? _standardPriceFromTheaterSize;
+    return _isPremiumFormat ? (_standardPriceFromTheaterSize * 1.3).round() : _standardPriceFromTheaterSize;
+  }
+
+  int get _vipBasePrice {
+    if (_wednesdayDiscountApplies) return 50000;
+    if (_hasRealShowtime) return (widget.movieData['priceVip'] as num?)?.toInt() ?? _vipPriceFromTheaterSize;
+    return _isPremiumFormat ? (_vipPriceFromTheaterSize * 1.3).round() : _vipPriceFromTheaterSize;
+  }
 
   String _formatPrice(int price) =>
       '${price.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')}đ';
@@ -106,17 +155,15 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   int _getSeatPrice(String seatId) {
     final row = seatId[0];
 
-    int basePrice;
-    if (_sweetboxRowLabels.contains(row)) {
-      basePrice = _vipBasePrice + 80000; // Sweetbox đôi
-    } else if (_vipRowLabels.contains(row)) {
-      basePrice = _vipBasePrice; // VIP đơn
-    } else {
-      basePrice = _standardBasePrice; // Thường đơn
-    }
+    final basePrice = _wednesdayDiscountApplies
+        ? (_layout.sweetboxRowLabels.contains(row) ? 100000 : 50000)
+        : seatBasePrice(seatId: seatId, layout: _layout, priceStandard: _standardBasePrice, priceVip: _vipBasePrice);
 
-    int weekendSurcharge = _isWeekend() ? 15000 : 0;
-    int timeSurcharge = _getTimeSurcharge();
+    if (_wednesdayDiscountApplies) return basePrice; // Ưu đãi Thứ 4: đồng giá, không cộng thêm phụ thu khác
+
+    final surcharge = _surcharge;
+    final weekendSurcharge = (surcharge?.isWeekend ?? false) ? 15000 : 0;
+    final timeSurcharge = surcharge?.timeOfDaySurcharge ?? 0;
 
     return basePrice + weekendSurcharge + timeSurcharge;
   }
@@ -131,7 +178,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   }
 
   void _onSeatTap(String seatId, bool isDouble, List<String> bookedSeats, Map<String, String> currentLocks) {
-    if (bookedSeats.contains(seatId) || _brokenSeats.contains(seatId)) return; // REAL-TIME LOCK: Đã bán/hỏng thì cấm chạm
+    if (bookedSeats.contains(seatId) || _layout.brokenSeats.contains(seatId)) return; // REAL-TIME LOCK: Đã bán/hỏng thì cấm chạm
 
     final userEmail = FirebaseAuth.instance.currentUser?.email ?? 'anonymous';
     final lockedBy = currentLocks[seatId];
@@ -242,6 +289,12 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                   final seatId = data['seatId'] as String;
                   final lockedBy = data['lockedBy'] as String;
                   currentLocks[seatId] = lockedBy;
+                } else {
+                  // Dọn dẹp khóa ghế đã hết hạn (best-effort) - trước đây chỉ
+                  // bị ẩn ở client (lọc theo expiresAt), document vẫn tồn tại
+                  // mãi trong Firestore không ai xóa, khiến temporary_locks
+                  // phình to vô ích theo thời gian.
+                  doc.reference.delete().catchError((_) {});
                 }
               }
             }
@@ -287,11 +340,11 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                           if (_isGoldClass)
                             _buildNoteItem('Ghế Gold (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E))
                           else if (_isLamour)
-                            _buildNoteItem("Ghế đôi L'amour (${_formatPrice(_vipBasePrice + 80000)})", const Color(0xFF3A1A1A))
+                            _buildNoteItem("Ghế đôi L'amour (${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))})", const Color(0xFF3A1A1A))
                           else ...[
-                            if (_standardRows > 0) _buildNoteItem('Thường (${_formatPrice(_standardBasePrice)})', const Color(0xFF222232)),
-                            if (_vipRows > 0) _buildNoteItem('VIP (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E)),
-                            if (_sweetboxRows > 0) _buildNoteItem('Sweetbox (${_formatPrice(_vipBasePrice + 80000)})', const Color(0xFF3A2232)),
+                            if (_layout.standardRows > 0) _buildNoteItem('Thường (${_formatPrice(_standardBasePrice)})', const Color(0xFF222232)),
+                            if (_layout.vipRows > 0) _buildNoteItem('VIP (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E)),
+                            if (_layout.sweetboxRows > 0) _buildNoteItem('Sweetbox (${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))})', const Color(0xFF3A2232)),
                           ],
                           _buildNoteItem('Đang chọn', Colors.amber),
                           _buildNoteItem('Đang giữ (5p)', Colors.grey.withValues(alpha: 0.3)),
@@ -320,136 +373,13 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 10),
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
-                          child: Column(
-                            children: [
-                              for (var row in _standardVipRowLabels) ...[
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Container(width: 20, alignment: Alignment.center, child: Text(row, style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 12))),
-                                    ...List.generate(_seatsPerRow, (index) {
-                                      final seatId = '$row${index + 1}';
-                                      final isSelected = _selectedSeats.contains(seatId);
-                                      final isBooked = bookedSeats.contains(seatId) || _brokenSeats.contains(seatId);
-                                      final lockedBy = currentLocks[seatId];
-                                      final isLockedByOthers = lockedBy != null && lockedBy != userEmail;
-                                      final isVIP = _vipRowLabels.contains(row);
-                                      final isGold = _isGoldClass && isVIP;
-                                      final goldColor = roomFormatColor('GoldClass');
-
-                                      Color seatColor = const Color(0xFF222232);
-                                      Color borderColor = Colors.white.withValues(alpha: 0.05);
-                                      Color labelColor = Colors.white70;
-                                      if (isBooked) {
-                                        seatColor = Colors.redAccent.withValues(alpha: 0.3);
-                                        borderColor = Colors.redAccent;
-                                      } else if (isLockedByOthers) {
-                                        seatColor = Colors.grey.withValues(alpha: 0.15);
-                                        borderColor = Colors.grey.withValues(alpha: 0.3);
-                                      } else if (isSelected) {
-                                        seatColor = isVIP ? (isGold ? goldColor : Colors.orangeAccent) : Colors.amber;
-                                        borderColor = Colors.white;
-                                        labelColor = Colors.black;
-                                      } else if (isGold) {
-                                        seatColor = const Color(0xFF2A2415);
-                                        borderColor = goldColor.withValues(alpha: 0.4);
-                                        labelColor = goldColor;
-                                      } else if (isVIP) {
-                                        seatColor = const Color(0xFF322A1E);
-                                        borderColor = Colors.orangeAccent.withValues(alpha: 0.2);
-                                        labelColor = Colors.orangeAccent;
-                                      }
-                                      if (isBooked) labelColor = Colors.redAccent;
-
-                                      final seatSize = isGold ? 40.0 : 28.0;
-
-                                      return GestureDetector(
-                                        onTap: () => _onSeatTap(seatId, false, bookedSeats, currentLocks),
-                                        child: Container(
-                                          margin: const EdgeInsets.all(3),
-                                          width: seatSize, height: seatSize,
-                                          decoration: BoxDecoration(
-                                            color: seatColor,
-                                            borderRadius: BorderRadius.circular(isGold ? 8 : 5),
-                                            border: Border.all(color: borderColor, width: isGold ? 1.5 : 1),
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: isLockedByOthers
-                                              ? const Icon(Icons.lock_rounded, color: Colors.grey, size: 12)
-                                              : (isGold
-                                                  ? Icon(Icons.event_seat_rounded, color: labelColor, size: 20)
-                                                  : Text(
-                                                      '${index + 1}',
-                                                      style: TextStyle(color: labelColor, fontSize: 10, fontWeight: FontWeight.bold),
-                                                    )),
-                                        ),
-                                      );
-                                    }),
-                                  ],
-                                ),
-                              ],
-                              if (_sweetboxRows > 0) ...[
-                              const SizedBox(height: 15),
-                              Text(
-                                _isLamour ? "HÀNG GHẾ ĐÔI L'AMOUR - RIÊNG TƯ LÃNG MẠN" : 'HÀNG GHẾ ĐÔI SWEETBOX PREMIUM',
-                                style: TextStyle(color: _isLamour ? roomFormatColor("L'amour") : Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 8),
-                              for (var row in _sweetboxRowLabels) ...[
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Container(width: 20, alignment: Alignment.center, child: Text(row, style: TextStyle(color: _isLamour ? roomFormatColor("L'amour") : Colors.pinkAccent, fontWeight: FontWeight.bold, fontSize: 12))),
-                                    ...List.generate((_seatsPerRow / 2).floor(), (index) {
-                                      final seatId = '$row${index * 2 + 1}-$row${index * 2 + 2}';
-                                      final isSelected = _selectedSeats.contains(seatId);
-                                      final isBooked = bookedSeats.contains(seatId) || _brokenSeats.contains(seatId);
-                                      final lockedBy = currentLocks[seatId];
-                                      final isLockedByOthers = lockedBy != null && lockedBy != userEmail;
-                                      final accentColor = _isLamour ? roomFormatColor("L'amour") : Colors.pinkAccent;
-
-                                      Color sweetColor = const Color(0xFF3A2232);
-                                      Color sweetBorder = accentColor.withValues(alpha: 0.2);
-                                      if (isBooked) {
-                                        sweetColor = Colors.redAccent.withValues(alpha: 0.2);
-                                        sweetBorder = Colors.redAccent;
-                                      } else if (isLockedByOthers) {
-                                        sweetColor = Colors.grey.withValues(alpha: 0.15);
-                                        sweetBorder = Colors.grey.withValues(alpha: 0.3);
-                                      } else if (isSelected) {
-                                        sweetColor = accentColor;
-                                        sweetBorder = Colors.white;
-                                      }
-
-                                      return GestureDetector(
-                                        onTap: () => _onSeatTap(seatId, true, bookedSeats, currentLocks),
-                                        child: Container(
-                                          margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-                                          width: 62, height: 30,
-                                          decoration: BoxDecoration(
-                                            color: sweetColor,
-                                            borderRadius: BorderRadius.circular(6),
-                                            border: Border.all(color: sweetBorder),
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: isLockedByOthers
-                                              ? const Icon(Icons.lock_rounded, color: Colors.grey, size: 14)
-                                              : Text(
-                                                  '$row${index * 2 + 1}•$row${index * 2 + 2}',
-                                                  style: TextStyle(
-                                                    color: isBooked ? Colors.redAccent : Colors.white,
-                                                    fontSize: 9,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                        ),
-                                      );
-                                    }),
-                                  ],
-                                ),
-                              ],
-                              ],
-                            ],
+                          child: SeatGridView(
+                            layout: _layout,
+                            selectedSeats: _selectedSeats.toSet(),
+                            bookedSeats: {...bookedSeats, ..._layout.brokenSeats},
+                            lockedBySeatId: currentLocks,
+                            currentUserKey: userEmail,
+                            onSeatTap: (seatId) => _onSeatTap(seatId, false, bookedSeats, currentLocks),
                           ),
                         ),
                       ),
@@ -466,10 +396,10 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                         (_isGoldClass
                                 ? 'Phân tích giá vé: Ghế Gold: ${_formatPrice(_vipBasePrice)}. '
                                 : _isLamour
-                                    ? "Phân tích giá vé: Ghế đôi L'amour: ${_formatPrice(_vipBasePrice + 80000)}. "
-                                    : 'Phân tích giá vé: Ghế Thường: ${_formatPrice(_standardBasePrice)}, VIP: ${_formatPrice(_vipBasePrice)}, Sweetbox: ${_formatPrice(_vipBasePrice + 80000)}. ') +
-                        '${_isWeekend() ? "Cuối tuần (+15k/ghế)" : "Ngày thường (+0k)"} '
-                        '${_getTimeSurcharge() < 0 ? "| Suất sớm (-10k/ghế)" : (_getTimeSurcharge() > 0 ? "| Suất khuya (+10k/ghế)" : "| Suất thường (+0k)")}',
+                                    ? "Phân tích giá vé: Ghế đôi L'amour: ${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))}. "
+                                    : 'Phân tích giá vé: Ghế Thường: ${_formatPrice(_standardBasePrice)}, VIP: ${_formatPrice(_vipBasePrice)}, Sweetbox: ${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))}. ') +
+                        '${(_surcharge?.isWeekend ?? false) ? "Cuối tuần (+15k/ghế)" : "Ngày thường (+0k)"} '
+                        '| ${widget.movieData['sessionType'] ?? 'Standard'} (${(_surcharge?.timeOfDaySurcharge ?? 0) > 0 ? '+' : ''}${_formatPrice(_surcharge?.timeOfDaySurcharge ?? 0)}/ghế)',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic),
                       ),

@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 import '../../../main.dart';
 import '../../../providers/user_provider.dart';
+import '../../../models/showtime.dart';
+import '../../../models/session_type.dart';
 import 'theater_voucher_screen.dart';
-import 'room_management_screen.dart' show RoomManagementScreen, roomFormatColor;
+import 'smart_roster_screen.dart';
+import 'manager_incident_screen.dart';
+import 'package:dat_ve_xem_phim_group5/features/theater_manager/screens/room_management_screen.dart' show RoomManagementScreen, roomFormatColor;
 
 class TheaterManagerDashboardScreen extends StatefulWidget {
   final UserProfile managerProfile;
@@ -48,6 +53,14 @@ class _TheaterManagerDashboardScreenState extends State<TheaterManagerDashboardS
         ),
         automaticallyImplyLeading: false,
         actions: [
+          IconButton(
+            icon: const Icon(Icons.report_problem_rounded, color: Colors.orangeAccent),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => ManagerIncidentScreen(theater: theater)),
+            ),
+            tooltip: 'Sự cố',
+          ),
           if (_tab.index == 0) ...[
             IconButton(
               icon: const Icon(Icons.weekend_rounded, color: Colors.deepPurpleAccent),
@@ -58,7 +71,7 @@ class _TheaterManagerDashboardScreenState extends State<TheaterManagerDashboardS
               tooltip: 'Quản lý phòng chiếu',
             ),
             IconButton(
-              icon: const Icon(Icons.add_rounded, color: Colors.deepPurpleAccent),
+              icon: const Icon(Icons.add_rounded, color: Colors.white),
               onPressed: () => _showAddShowtimeDialog(context, theater),
               tooltip: 'Thêm suất chiếu',
             ),
@@ -138,13 +151,21 @@ class _ShowtimesTab extends StatelessWidget {
       stream: FirebaseFirestore.instance
           .collection('showtimes')
           .where('theaterName', isEqualTo: theater)
-          .orderBy('date')
           .snapshots(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent));
         }
-        final docs = snap.data?.docs ?? [];
+        // Sort theo showAt thật (parse fallback cho tài liệu cũ) thay vì
+        // orderBy('date') trên string - field 'date' từng lẫn lộn 2 định dạng
+        // (ISO và nhãn tiếng Việt) nên sort theo string cho kết quả sai.
+        final docs = (snap.data?.docs ?? []).toList()
+          ..sort((a, b) {
+            final sa = Showtime.fromMap(a.id, a.data() as Map<String, dynamic>).showAt;
+            final sb = Showtime.fromMap(b.id, b.data() as Map<String, dynamic>).showAt;
+            if (sa == null || sb == null) return 0;
+            return sa.compareTo(sb);
+          });
         if (docs.isEmpty) {
           return Center(
             child: Column(
@@ -245,7 +266,7 @@ class _ShowtimeCard extends StatelessWidget {
                     ],
                   ],
                 ),
-                Text('${d['date']} • ${d['time']}',
+                Text('${d['date']} • ${d['time']} • ${d['language'] ?? 'Phụ đề'} • ${d['sessionType'] ?? 'Standard'}',
                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
                 Text('Phòng: ${d['roomName'] ?? '—'}',
                     style: const TextStyle(color: Colors.white38, fontSize: 11)),
@@ -255,6 +276,59 @@ class _ShowtimeCard extends StatelessWidget {
                     const SizedBox(width: 4),
                     _priceChip('VIP', d['priceVip'], Colors.amber),
                   ],
+                ),
+                const SizedBox(height: 8),
+                // Heatmap (Tỷ lệ lấp đầy)
+                StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance
+                      .collection('tickets')
+                      .where('theaterName', isEqualTo: theater)
+                      .where('showDate', isEqualTo: d['date'])
+                      .where('showTime', isEqualTo: d['time'])
+                      .where('movieTitle', isEqualTo: d['movieTitle']) // Thêm ràng buộc phim cho chắc
+                      .snapshots(),
+                  builder: (context, snapshot) {
+                    int booked = 0;
+                    if (snapshot.hasData) {
+                      for (var t in snapshot.data!.docs) {
+                        final tData = t.data() as Map<String, dynamic>;
+                        if (tData['paymentStatus'] != 'CANCELLED') {
+                          final seats = tData['seats'] as List<dynamic>? ?? [];
+                          booked += seats.length;
+                        }
+                      }
+                    }
+                    // Giả sử capacity là 104
+                    const int capacity = 104;
+                    final pct = (booked / capacity).clamp(0.0, 1.0);
+                    Color heatColor = Colors.greenAccent;
+                    if (pct > 0.8) heatColor = Colors.redAccent;
+                    else if (pct > 0.5) heatColor = Colors.orangeAccent;
+                    
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.people_alt_rounded, color: Colors.white54, size: 12),
+                            const SizedBox(width: 4),
+                            Text('Lấp đầy: $booked / $capacity (${(pct * 100).toStringAsFixed(1)}%)',
+                                style: TextStyle(color: heatColor, fontSize: 11, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: pct,
+                            backgroundColor: Colors.white12,
+                            color: heatColor,
+                            minHeight: 4,
+                          ),
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),
@@ -350,15 +424,35 @@ class _ShowtimeDialogWidget extends StatefulWidget {
   State<_ShowtimeDialogWidget> createState() => _ShowtimeDialogWidgetState();
 }
 
+// Thời lượng mặc định dùng khi không tra được phim trong collection 'movies'
+// (vd. gõ sai tên, hoặc phim chưa được admin thêm vào hệ thống) - fallback an
+// toàn, KHÔNG phải giá trị dùng cho mọi phim như trước (trước đây mọi suất
+// chiếu đều giả định chiếm phòng đúng 150 phút bất kể phim ngắn/dài, khiến
+// phim ngắn bị chặn nhầm suất kế tiếp còn phim dài có thể bị xếp chồng giờ
+// thật mà không phát hiện ra).
+const _kFallbackShowtimeDuration = Duration(minutes: 150);
+
+// Cộng thêm 10 phút quảng cáo/dọn phòng sau khi phim kết thúc, khớp cách tính
+// giờ ra về ở showtime_selection_screen.dart (durationMins + 10).
+DateTime _showtimeWindowEnd(DateTime showAt, Duration movieDuration) =>
+    showAt.add(movieDuration + const Duration(minutes: 10));
+
 class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
   final _movieCtrl = TextEditingController();
   final _roomCtrl = TextEditingController();
-  final _dateCtrl = TextEditingController();
-  final _timeCtrl = TextEditingController();
   final _priceStdCtrl = TextEditingController();
   final _priceVipCtrl = TextEditingController();
   final _repeatDaysCtrl = TextEditingController(text: '1');
   String? _roomFormat;
+  // Ngôn ngữ suất chiếu - thuộc tính riêng của suất chiếu, không phải của
+  // phòng (xem models/showtime.dart Showtime.language).
+  String _language = 'Phụ đề';
+  // null = "Tự động" (suy ra từ giờ chiếu + ngày công chiếu phim khi lưu) -
+  // chỉ set khác null khi manager chủ động chọn 1 trong 3 loại đặc biệt
+  // (Marathon/Fan Screening/Special Event, xem models/session_type.dart).
+  String? _manualSessionType;
+  DateTime? _selectedDate;
+  TimeOfDay? _selectedTime;
 
   @override
   void initState() {
@@ -367,11 +461,19 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
     if (d != null) {
       _movieCtrl.text = d['movieTitle'] ?? '';
       _roomCtrl.text = d['roomName'] ?? '';
-      _dateCtrl.text = d['date'] ?? '';
-      _timeCtrl.text = d['time'] ?? '';
       _priceStdCtrl.text = '${d['priceStandard'] ?? 90000}';
       _priceVipCtrl.text = '${d['priceVip'] ?? 120000}';
       _roomFormat = d['roomFormat'] as String?;
+      _language = d['language'] as String? ?? 'Phụ đề';
+      final existingSessionType = d['sessionType'] as String?;
+      if (existingSessionType != null && kManualSessionTypes.contains(existingSessionType)) {
+        _manualSessionType = existingSessionType;
+      }
+      final existingShowAt = Showtime.fromMap(widget.existingId ?? '', d).showAt;
+      if (existingShowAt != null) {
+        _selectedDate = DateTime(existingShowAt.year, existingShowAt.month, existingShowAt.day);
+        _selectedTime = TimeOfDay(hour: existingShowAt.hour, minute: existingShowAt.minute);
+      }
     } else {
       _priceStdCtrl.text = '90000';
       _priceVipCtrl.text = '120000';
@@ -380,10 +482,36 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
 
   @override
   void dispose() {
-    _movieCtrl.dispose(); _roomCtrl.dispose(); _dateCtrl.dispose();
-    _timeCtrl.dispose(); _priceStdCtrl.dispose(); _priceVipCtrl.dispose();
+    _movieCtrl.dispose(); _roomCtrl.dispose();
+    _priceStdCtrl.dispose(); _priceVipCtrl.dispose();
     _repeatDaysCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate ?? DateTime.now(),
+      firstDate: DateTime.now().subtract(const Duration(days: 1)),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+      builder: (ctx, child) => Theme(
+        data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: Colors.deepPurpleAccent)),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _selectedDate = picked);
+  }
+
+  Future<void> _pickTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _selectedTime ?? TimeOfDay.now(),
+      builder: (ctx, child) => Theme(
+        data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: Colors.deepPurpleAccent)),
+        child: child!,
+      ),
+    );
+    if (picked != null) setState(() => _selectedTime = picked);
   }
 
   @override
@@ -429,7 +557,7 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
                   style: const TextStyle(color: Colors.white, fontSize: 13),
                   items: roomNames
                       .map((r) => DropdownMenuItem(
-                          value: r, child: Text('$r  (${roomDocs[r]?['roomFormat'] ?? '2D Phụ đề'})')))
+                          value: r, child: Text('$r  (${roomDocs[r]?['roomFormat'] ?? 'Standard'})')))
                       .toList(),
                   onChanged: (v) => setState(() {
                     _roomCtrl.text = v ?? '';
@@ -439,10 +567,69 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
               },
             ),
             const SizedBox(height: 10),
-            _field(_dateCtrl, 'Ngày (yyyy-MM-dd)', Icons.calendar_today_rounded,
-                type: TextInputType.datetime),
+            Row(children: [
+              Expanded(
+                child: _pickerField(
+                  label: _selectedDate == null ? 'Chọn ngày chiếu' : DateFormat('dd/MM/yyyy').format(_selectedDate!),
+                  icon: Icons.calendar_today_rounded,
+                  onTap: _pickDate,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _pickerField(
+                  label: _selectedTime == null ? 'Chọn giờ chiếu' : _selectedTime!.format(context),
+                  icon: Icons.access_time_rounded,
+                  onTap: _pickTime,
+                ),
+              ),
+            ]),
             const SizedBox(height: 10),
-            _field(_timeCtrl, 'Giờ (HH:mm)', Icons.access_time_rounded),
+            DropdownButtonFormField<String>(
+              value: _language,
+              dropdownColor: const Color(0xFF1E1E2A),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF1E1E2A),
+                prefixIcon: const Icon(Icons.subtitles_rounded, color: Colors.deepPurpleAccent, size: 18),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              ),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: const [
+                DropdownMenuItem(value: 'Phụ đề', child: Text('Phụ đề')),
+                DropdownMenuItem(value: 'Lồng tiếng', child: Text('Lồng tiếng')),
+              ],
+              onChanged: (v) => setState(() => _language = v ?? 'Phụ đề'),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String?>(
+              value: _manualSessionType,
+              dropdownColor: const Color(0xFF1E1E2A),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: const Color(0xFF1E1E2A),
+                prefixIcon: const Icon(Icons.event_rounded, color: Colors.deepPurpleAccent, size: 18),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+              ),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
+              items: [
+                const DropdownMenuItem<String?>(value: null, child: Text('Loại suất: Tự động (theo giờ chiếu)')),
+                ...kManualSessionTypes.map((t) => DropdownMenuItem<String?>(value: t, child: Text(t))),
+              ],
+              onChanged: (v) => setState(() => _manualSessionType = v),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Để "Tự động" thì loại suất (Morning/Late Morning/Afternoon/Prime Time/Evening/Midnight/Sneak Show/First Day) sẽ tự tính theo giờ chiếu và ngày công chiếu phim khi lưu.',
+                  style: TextStyle(color: Colors.white38, fontSize: 10),
+                ),
+              ),
+            ),
             const SizedBox(height: 10),
             Row(children: [
               Expanded(child: _field(_priceStdCtrl, 'Giá STD (đ)', Icons.chair_rounded, type: TextInputType.number)),
@@ -495,23 +682,35 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
     );
   }
 
-  // Ngày kế tiếp dạng "yyyy-MM-dd" (dùng cho lặp lại hàng loạt) - chỉ áp dụng
-  // khi ngày gốc đúng định dạng ISO (suất chiếu do manager tạo luôn theo
-  // định dạng này, khác với chuỗi tiếng Việt dự phòng của khách khi chưa có
-  // suất thật).
-  String? _addDays(String isoDate, int days) {
-    final m = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(isoDate);
-    if (m == null) return null;
-    final d = DateTime(int.parse(m[1]!), int.parse(m[2]!), int.parse(m[3]!)).add(Duration(days: days));
-    return '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+  Widget _pickerField({required String label, required IconData icon, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        decoration: BoxDecoration(color: const Color(0xFF1E1E2A), borderRadius: BorderRadius.circular(8)),
+        child: Row(
+          children: [
+            Icon(icon, color: Colors.deepPurpleAccent, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 13), overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _overlapsWindow(DateTime a, DateTime b, Duration movieDuration) {
+    final aEnd = _showtimeWindowEnd(a, movieDuration);
+    final bEnd = _showtimeWindowEnd(b, movieDuration);
+    return a.isBefore(bEnd) && b.isBefore(aEnd);
   }
 
   Future<void> _save() async {
     final roomName = _roomCtrl.text.trim();
-    final date = _dateCtrl.text.trim();
-    final time = _timeCtrl.text.trim();
 
-    if (roomName.isEmpty || date.isEmpty || time.isEmpty) {
+    if (roomName.isEmpty || _selectedDate == null || _selectedTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Vui lòng điền đủ thông tin Phòng, Ngày và Giờ chiếu!'), backgroundColor: Colors.orangeAccent),
       );
@@ -522,56 +721,98 @@ class _ShowtimeDialogWidgetState extends State<_ShowtimeDialogWidget> {
       'movieTitle': _movieCtrl.text.trim(),
       'theaterName': widget.theater,
       'roomName': roomName,
-      'roomFormat': _roomFormat ?? '2D Phụ đề',
-      'time': time,
+      'roomFormat': _roomFormat ?? 'Standard',
+      'language': _language,
       'priceStandard': int.tryParse(_priceStdCtrl.text) ?? 90000,
       'priceVip': int.tryParse(_priceVipCtrl.text) ?? 120000,
       'status': 'active',
     };
 
+    final baseShowAt = DateTime(
+      _selectedDate!.year, _selectedDate!.month, _selectedDate!.day,
+      _selectedTime!.hour, _selectedTime!.minute,
+    );
+
+    // Tra phim theo tên (dùng chung 1 lượt đọc cho cả ngày công chiếu - để tự
+    // động phát hiện Sneak Show/First Day, xem models/session_type.dart - và
+    // thời lượng thật - để tính đúng khung giờ phòng bị chiếm khi chống trùng
+    // giờ bên dưới, thay vì giả định cố định 150 phút cho mọi phim).
+    DateTime? movieReleaseDate;
+    Duration movieDuration = _kFallbackShowtimeDuration;
+    final movieSnap = await FirebaseFirestore.instance
+        .collection('movies')
+        .where('title', isEqualTo: _movieCtrl.text.trim())
+        .limit(1)
+        .get();
+    if (movieSnap.docs.isNotEmpty) {
+      final movieData = movieSnap.docs.first.data();
+      if (_manualSessionType == null) {
+        movieReleaseDate = parseReleaseDate(movieData['releaseDate'] as String?);
+      }
+      final durationMatch = RegExp(r'\d+').firstMatch(movieData['duration'] as String? ?? '');
+      if (durationMatch != null) {
+        movieDuration = Duration(minutes: int.parse(durationMatch.group(0)!));
+      }
+    }
+    String sessionTypeFor(DateTime showAt) =>
+        _manualSessionType ?? detectSessionType(showAt, movieReleaseDate);
+
+    // Suất chiếu khác cùng phòng, để check chồng giờ - chỉ dùng equality
+    // filter (theaterName/roomName) nên không cần Firestore composite index
+    // mới; so khớp thời gian thật (showAt) làm ở client.
+    final roomShowtimesSnap = await FirebaseFirestore.instance
+        .collection('showtimes')
+        .where('theaterName', isEqualTo: widget.theater)
+        .where('roomName', isEqualTo: roomName)
+        .get();
+    final otherShowAts = roomShowtimesSnap.docs
+        .where((doc) => doc.id != widget.existingId)
+        .map((doc) => Showtime.fromMap(doc.id, doc.data()).showAt)
+        .whereType<DateTime>()
+        .toList();
+
     if (widget.existingId != null) {
-      // Sửa 1 suất đã có: giữ nguyên logic cũ, chặn hẳn nếu trùng.
-      final conflictCheck = await FirebaseFirestore.instance
-          .collection('showtimes')
-          .where('theaterName', isEqualTo: widget.theater)
-          .where('roomName', isEqualTo: roomName)
-          .where('date', isEqualTo: date)
-          .where('time', isEqualTo: time)
-          .get();
-      final hasConflict = conflictCheck.docs.any((doc) => doc.id != widget.existingId);
-      if (hasConflict) {
+      if (otherShowAts.any((s) => _overlapsWindow(s, baseShowAt, movieDuration))) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Phòng chiếu này đã có phim khác chiếu vào cùng giờ! Vui lòng chọn giờ hoặc phòng khác.'), backgroundColor: Colors.redAccent),
+            const SnackBar(content: Text('Phòng chiếu này đã có phim khác chiếu chồng giờ! Vui lòng chọn giờ hoặc phòng khác.'), backgroundColor: Colors.redAccent),
           );
         }
         return;
       }
-      await FirebaseFirestore.instance.collection('showtimes').doc(widget.existingId).update({...baseData, 'date': date});
+      await FirebaseFirestore.instance.collection('showtimes').doc(widget.existingId).update({
+        ...baseData,
+        'showAt': Timestamp.fromDate(baseShowAt),
+        'date': Showtime.isoDate(baseShowAt),
+        'time': Showtime.hhmm(baseShowAt),
+        'sessionType': sessionTypeFor(baseShowAt),
+      });
     } else {
-      // Tạo mới - hỗ trợ lặp lại N ngày liên tiếp. Ngày nào bị trùng
-      // phòng+giờ với suất đã có thì bỏ qua ngày đó (không chặn cả loạt),
-      // báo lại cho manager biết đã tạo/bỏ qua bao nhiêu suất.
+      // Tạo mới - hỗ trợ lặp lại N ngày liên tiếp. Ngày nào chồng giờ với suất
+      // đã có (hoặc với suất khác vừa tạo trong cùng lượt này) thì bỏ qua
+      // ngày đó (không chặn cả loạt), báo lại cho manager biết đã tạo/bỏ qua
+      // bao nhiêu suất.
       final repeatDays = (int.tryParse(_repeatDaysCtrl.text) ?? 1).clamp(1, 60);
-      final existingSnap = await FirebaseFirestore.instance
-          .collection('showtimes')
-          .where('theaterName', isEqualTo: widget.theater)
-          .where('roomName', isEqualTo: roomName)
-          .where('time', isEqualTo: time)
-          .get();
-      final existingDates = existingSnap.docs.map((d) => (d.data())['date'] as String?).whereType<String>().toSet();
-
       final batch = FirebaseFirestore.instance.batch();
+      final newShowAts = <DateTime>[];
       int created = 0, skipped = 0;
       for (int i = 0; i < repeatDays; i++) {
-        final thisDate = i == 0 ? date : (_addDays(date, i) ?? date);
-        if (existingDates.contains(thisDate)) {
+        final thisShowAt = baseShowAt.add(Duration(days: i));
+        final conflicts = [...otherShowAts, ...newShowAts].any((s) => _overlapsWindow(s, thisShowAt, movieDuration));
+        if (conflicts) {
           skipped++;
           continue;
         }
-        existingDates.add(thisDate); // tránh tự trùng giữa các ngày mới tạo trong cùng lượt này
+        newShowAts.add(thisShowAt);
         final ref = FirebaseFirestore.instance.collection('showtimes').doc();
-        batch.set(ref, {...baseData, 'date': thisDate, 'createdAt': Timestamp.now()});
+        batch.set(ref, {
+          ...baseData,
+          'showAt': Timestamp.fromDate(thisShowAt),
+          'date': Showtime.isoDate(thisShowAt),
+          'time': Showtime.hhmm(thisShowAt),
+          'sessionType': sessionTypeFor(thisShowAt),
+          'createdAt': Timestamp.now(),
+        });
         created++;
       }
       await batch.commit();
@@ -695,11 +936,28 @@ class _StaffListTab extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _AssignStaffDialog.show(context, theater: theater),
-        backgroundColor: Colors.deepPurpleAccent,
-        icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.white),
-        label: const Text('Gán nhân viên', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          FloatingActionButton.extended(
+            heroTag: 'roster_btn',
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => SmartRosterScreen(theater: theater)));
+            },
+            backgroundColor: Colors.blueAccent,
+            icon: const Icon(Icons.calendar_month_rounded, color: Colors.white),
+            label: const Text('Phân công ca', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+          const SizedBox(height: 12),
+          FloatingActionButton.extended(
+            heroTag: 'assign_btn',
+            onPressed: () => _AssignStaffDialog.show(context, theater: theater),
+            backgroundColor: Colors.deepPurpleAccent,
+            icon: const Icon(Icons.person_add_alt_1_rounded, color: Colors.white),
+            label: const Text('Gán nhân viên', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance

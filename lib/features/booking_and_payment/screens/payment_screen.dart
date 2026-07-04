@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -16,6 +17,7 @@ import '../services/discount_service.dart';
 import '../services/discount_service.dart';
 import '../services/age_verification_service.dart';
 import '../services/payment_service.dart';
+import '../services/seat_reservation_service.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> movieData;
@@ -61,6 +63,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _pendingTicketRef = null;
     try {
       await ref.update({'paymentStatus': 'CANCELLED'});
+      // Nhả ghế đã đặt trước trong showtime_seat_status (Phase 4) - nếu không
+      // làm bước này, ghế của vé PENDING bỏ ngang sẽ bị kẹt vĩnh viễn trong
+      // lớp check atomic mới dù vé đã CANCELLED (khác với seat_booking_screen.dart
+      // vẫn thấy ghế trống đúng vì lọc theo paymentStatus != CANCELLED).
+      final showtimeId = widget.movieData['showtimeId'] as String?;
+      if (showtimeId != null) {
+        await releaseShowtimeSeats(showtimeId: showtimeId, seatIds: widget.selectedSeats);
+      }
     } catch (e) {
       debugPrint('Không hủy được vé PENDING bỏ ngang: $e');
     }
@@ -71,6 +81,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String _membershipTierName = '';
   bool _isHappyWednesday = false;
   int _autoDiscountAmount = 0;
+
+  // Tích điểm loyalty
+  int _loyaltyPoints = 0;
+  bool _useLoyaltyPoints = false;
+  int get _loyaltyDiscountAmount => _useLoyaltyPoints ? _loyaltyPoints * 100 : 0; // 1 point = 100 VND
+
+  // Voucher KHÔNG cộng dồn với giảm giá tự động (hạng thành viên + Happy
+  // Wednesday) - rạp thật thường không cho 1 đơn vừa áp mã vừa hưởng ưu đãi
+  // thành viên. Hệ thống tự áp dụng mức nào có lợi hơn cho khách, không cộng
+  // cả hai. Điểm tích lũy vẫn cộng thêm bình thường (đó là tiêu tiền/điểm
+  // khách đã tích được, không phải một chương trình khuyến mãi khác).
+  int get _promoDiscount => math.max(_discountAmount, _autoDiscountAmount);
 
   // Nâng cấp: Các phương thức thanh toán và điều khoản
   String _selectedPaymentMethod = 'bank'; // 'bank' hoặc 'wallet'
@@ -115,7 +137,11 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null || user.email == null) return;
     
-    final result = await DiscountService().calculateDiscounts(user.email!);
+    final result = await DiscountService().calculateDiscounts(
+      user.email!,
+      roomFormat: widget.movieData['roomFormat'] as String?,
+    );
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
     
     if (mounted) {
       setState(() {
@@ -123,6 +149,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
         _membershipTierName = result.tierName;
         _membershipDiscountPct = result.membershipPct;
         _autoDiscountAmount = (widget.totalPrice * result.totalAutoPct / 100).round();
+        if (userDoc.exists) {
+          final data = userDoc.data() as Map<String, dynamic>;
+          _loyaltyPoints = (data['loyalty_points'] as num?)?.toInt() ?? 0;
+        }
       });
     }
   }
@@ -378,17 +408,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
       },
     );
   }
-
-  void _incrementVoucherUsageIfApplied() {
-    if (_appliedVoucher == null) return;
-    // Best-effort, không dùng transaction: chấp nhận rủi ro hiếm gặp là
-    // currentUses vượt nhẹ maxUses nếu nhiều người dùng cùng lúc (đã ghi
-    // chú trong AUDIT_AND_ROADMAP.md, ưu tiên thấp hơn các lỗi P0/P1 khác).
-    FirebaseFirestore.instance.collection('vouchers').doc(_appliedVoucher).update({
-      'currentUses': FieldValue.increment(1),
-    }).catchError((_) {});
-  }
-
   void _handleConfirmPayment() {
     // Nếu dùng Ví ảo, xử lý trực tiếp không qua PayOS
     if (_selectedPaymentMethod == 'wallet') {
@@ -401,8 +420,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   void _processPayOSPayment() async {
-    final finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
-    
+    final finalPrice = (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount) < 0 ? 0 : (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount);
+
     if (finalPrice <= 0) {
       _executeWalletPayment(); // Miễn phí thì duyệt luôn
       return;
@@ -424,9 +443,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       selectedSeats: widget.selectedSeats,
       combos: widget.combos,
       totalPrice: widget.totalPrice,
-      discountAmount: _discountAmount,
+      discountAmount: _promoDiscount + _loyaltyDiscountAmount,
       appliedVoucher: _appliedVoucher,
       verifiedCccd: _verifiedCccd,
+      usedLoyaltyPoints: _useLoyaltyPoints ? _loyaltyPoints : 0,
     );
 
     if (!mounted) return;
@@ -514,7 +534,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
           title: 'Thanh toán PayOS thành công',
           body: 'Vé xem phim ${widget.movieData['title']} của bạn đã sẵn sàng!',
         );
-        _incrementVoucherUsageIfApplied();
 
         if (mounted) {
           Navigator.pushReplacement(
@@ -527,7 +546,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   void _executeWalletPayment() async {
-    final finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
+    final finalPrice = (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount) < 0 ? 0 : (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount);
 
     _timer?.cancel();
     setState(() => _isProcessing = true);
@@ -545,9 +564,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       selectedSeats: widget.selectedSeats,
       combos: widget.combos,
       totalPrice: widget.totalPrice,
-      discountAmount: _discountAmount,
+      discountAmount: _promoDiscount + _loyaltyDiscountAmount,
       appliedVoucher: _appliedVoucher,
       verifiedCccd: _verifiedCccd,
+      usedLoyaltyPoints: _useLoyaltyPoints ? _loyaltyPoints : 0,
     );
 
     if (!mounted) return;
@@ -575,7 +595,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
       return;
     }
 
-    _incrementVoucherUsageIfApplied();
     _clearTemporaryLocks();
 
     final movieTitle = widget.movieData['title'] ?? '';
@@ -596,7 +615,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   @override
   Widget build(BuildContext context) {
     final String movieTitle = widget.movieData['title'] ?? 'Phim Stella Cinema';
-    final int finalPrice = (widget.totalPrice - _discountAmount - _autoDiscountAmount) < 0 ? 0 : (widget.totalPrice - _discountAmount - _autoDiscountAmount);
+    final int finalPrice = (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount) < 0 ? 0 : (widget.totalPrice - _promoDiscount - _loyaltyDiscountAmount);
     final formatFinalPrice = finalPrice.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.');
 
     final minutes = (_secondsRemaining ~/ 60).toString().padLeft(2, '0');
@@ -736,6 +755,26 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             Text('-${_discountAmount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')} đ', style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13)),
                           ],
                         ),
+                        if (_autoDiscountAmount > 0)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4.0),
+                            child: Text(
+                              _discountAmount >= _autoDiscountAmount
+                                  ? '(Voucher có lợi hơn nên áp dụng, không cộng dồn với giảm tự động)'
+                                  : '(Giảm tự động có lợi hơn nên áp dụng, không cộng dồn với voucher)',
+                              style: const TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic),
+                            ),
+                          ),
+                      ],
+                      if (_loyaltyDiscountAmount > 0) ...[
+                        const Divider(color: Colors.white12, height: 16),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text('Điểm tích luỹ:', style: TextStyle(color: Colors.orangeAccent, fontSize: 13)),
+                            Text('-${_loyaltyDiscountAmount.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')} đ', style: const TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
                       ],
                       const Divider(color: Colors.white12, height: 16),
                       Row(
@@ -749,6 +788,33 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
+
+                // ĐIỂM TÍCH LUỸ
+                if (_loyaltyPoints > 0) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(color: const Color(0xFF0A0A0A), borderRadius: BorderRadius.circular(12)),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Dùng điểm tích luỹ', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text('Bạn có $_loyaltyPoints điểm (-${(_loyaltyPoints * 100).toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]}.')} đ)', style: const TextStyle(color: Colors.orangeAccent, fontSize: 11)),
+                          ],
+                        ),
+                        Switch(
+                          value: _useLoyaltyPoints,
+                          activeColor: Colors.orangeAccent,
+                          onChanged: (v) => setState(() => _useLoyaltyPoints = v),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                ],
 
                 // BỘ VOUCHER
                 Container(

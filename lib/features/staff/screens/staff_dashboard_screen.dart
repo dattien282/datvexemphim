@@ -9,6 +9,7 @@ import '../../../core/constants.dart';
 import '../../../main.dart';
 import 'staff_walkin_sale_screen.dart';
 import 'staff_seat_maintenance_screen.dart';
+import 'staff_incident_screen.dart';
 
 class StaffDashboardScreen extends StatefulWidget {
   final UserProfile staffProfile;
@@ -31,7 +32,7 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 2, vsync: this);
+    _tab = TabController(length: 3, vsync: this);
   }
 
   @override
@@ -76,6 +77,17 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
             tooltip: 'Ghế hỏng / bảo trì',
           ),
           IconButton(
+            icon: const Icon(Icons.report_problem_rounded, color: Colors.redAccent),
+            onPressed: () {
+              if (widget.staffProfile.assignedTheater == null) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => StaffIncidentScreen(theater: widget.staffProfile.assignedTheater!, staffEmail: widget.staffProfile.email)),
+              );
+            },
+            tooltip: 'Báo cáo sự cố',
+          ),
+          IconButton(
             icon: const Icon(Icons.qr_code_scanner_rounded, color: Colors.tealAccent),
             onPressed: _openQrScanner,
             tooltip: 'Quét mã QR',
@@ -93,7 +105,8 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
           unselectedLabelColor: Colors.white38,
           tabs: const [
             Tab(text: 'VÉ HÔM NAY'),
-            Tab(text: 'THỐNG KÊ CA'),
+            Tab(text: 'CA LÀM'),
+            Tab(text: 'THỐNG KÊ'),
           ],
         ),
       ),
@@ -103,6 +116,10 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
           _TicketListTab(
             theater: widget.staffProfile.assignedTheater,
             dateFilter: _dateFilter,
+          ),
+          _StaffShiftsTab(
+            theater: widget.staffProfile.assignedTheater,
+            staffId: widget.staffProfile.uid,
           ),
           _ShiftStatsTab(
             theater: widget.staffProfile.assignedTheater,
@@ -533,43 +550,59 @@ class _QrScanScreenState extends State<_QrScanScreen> {
     setState(() => _processing = true);
     await _ctrl.stop();
 
-    // QR hợp lệ chứa payload JSON {"ticketId": "...", "signature": "..."}
-    // được backend ký lúc vé chuyển COMPLETED (xem payment_screen.dart,
-    // backend-payos/server.js /sign-ticket & /payos-webhook).
+    // Lấy ticketId từ mã QR
     String? ticketId;
-    String? signature;
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       ticketId = decoded['ticketId'] as String?;
-      signature = decoded['signature'] as String?;
     } catch (_) {
-      // Không phải JSON hợp lệ - có thể là vé cũ/định dạng cũ.
+      if (raw.length > 5) ticketId = raw; // Fallback nếu QR chỉ là string trơn
     }
 
-    if (ticketId == null || signature == null) {
-      _show('Mã QR không hợp lệ hoặc vé chưa được ký. Dùng Check-in thủ công nếu cần.', false);
+    if (ticketId == null || ticketId.isEmpty) {
+      _show('Mã QR không hợp lệ.', false);
       return;
     }
 
     try {
-      final idToken = await FirebaseAuth.instance.currentUser?.getIdToken();
-      final response = await http.post(
-        Uri.parse('${AppConfig.paymentBackendUrl}/verify-checkin'),
-        headers: {
-          'Content-Type': 'application/json',
-          if (idToken != null) 'Authorization': 'Bearer $idToken',
-        },
-        body: jsonEncode({'ticketId': ticketId, 'signature': signature}),
-      ).timeout(const Duration(seconds: 10));
+      final doc = await FirebaseFirestore.instance.collection('tickets').doc(ticketId).get();
+      if (!doc.exists) {
+        _show('Vé không tồn tại trong hệ thống.', false);
+        return;
+      }
+      
+      final data = doc.data()!;
+      final status = data['status'] as String? ?? '';
+      final theater = data['theaterName'] as String? ?? '';
+      final movieTitle = data['movieTitle'] as String? ?? '';
 
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
-      final ok = body['success'] == true;
-      final message = ok
-          ? 'Check-in thành công!\n${body['movieTitle'] ?? ''}'
-          : (body['message'] ?? 'Check-in thất bại');
-      _show(message, ok);
+      // 1. Kiểm tra xem vé có đúng rạp của nhân viên không
+      if (widget.theater != null && widget.theater!.isNotEmpty && theater != widget.theater) {
+        _show('Vé này thuộc về rạp "$theater", không thể soát tại rạp này.', false);
+        return;
+      }
+
+      // 2. Kiểm tra trạng thái xài rồi
+      if (status == 'CHECKED_IN' || status == 'used') {
+        _show('Vé này ĐÃ ĐƯỢC SỬ DỤNG trước đó.', false);
+        return;
+      }
+
+      // 3. Kiểm tra trạng thái thanh toán
+      if (status != 'COMPLETED') {
+        _show('Vé chưa hoàn tất thanh toán (Status: $status).', false);
+        return;
+      }
+
+      // 4. Nếu mọi thứ hợp lệ -> Đánh dấu vé đã xài
+      await FirebaseFirestore.instance.collection('tickets').doc(ticketId).update({
+        'status': 'CHECKED_IN', // Cập nhật thành CHECKED_IN
+        'checkedInAt': FieldValue.serverTimestamp(),
+      });
+
+      _show('Check-in thành công!\nPhim: $movieTitle', true);
     } catch (e) {
-      _show('Lỗi kết nối máy chủ soát vé: $e', false);
+      _show('Lỗi truy xuất vé trên hệ thống: $e', false);
     }
   }
 
@@ -650,6 +683,77 @@ class _QrScanScreenState extends State<_QrScanScreen> {
             const Center(child: CircularProgressIndicator(color: Colors.tealAccent)),
         ],
       ),
+    );
+  }
+}
+
+// --- SHIFTS TAB ---
+class _StaffShiftsTab extends StatelessWidget {
+  final String? theater;
+  final String staffId;
+
+  const _StaffShiftsTab({required this.theater, required this.staffId});
+
+  @override
+  Widget build(BuildContext context) {
+    if (theater == null) return const Center(child: Text('Chưa gán rạp', style: TextStyle(color: Colors.white54)));
+
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('shifts')
+          .where('theater', isEqualTo: theater)
+          .where('staffIds', arrayContains: staffId)
+          .orderBy('date', descending: true)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: Colors.tealAccent));
+        }
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return const Center(child: Text('Bạn chưa được phân công ca nào.', style: TextStyle(color: Colors.white54)));
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: docs.length,
+          itemBuilder: (ctx, i) {
+            final d = docs[i].data() as Map<String, dynamic>;
+            final date = d['date'] ?? '';
+            final shiftType = d['shiftType'] ?? '';
+            String shiftName = 'Khác';
+            if (shiftType == 'morning') shiftName = 'Sáng (08:00 - 15:00)';
+            else if (shiftType == 'afternoon') shiftName = 'Chiều (15:00 - 22:00)';
+            else if (shiftType == 'night') shiftName = 'Tối (22:00 - 02:00)';
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E2A),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.calendar_month_rounded, color: Colors.tealAccent, size: 28),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(date, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 4),
+                        Text(shiftName, style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

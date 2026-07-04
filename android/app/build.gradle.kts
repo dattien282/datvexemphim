@@ -32,14 +32,6 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-
-    // ✅ ÉP ĐƯỜNG DẪN XUẤT APK VỀ ĐÚNG HANG Ổ CỦA FLUTTER
-    applicationVariants.all {
-        outputs.all {
-            val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-            output.outputFileName = "../../../../../../build/app/outputs/flutter-apk/app-debug.apk"
-        }
-    }
 }
 
 // ✅ ĐÂY RỒI!!! ĐẶT BLOCK ÉP JVM 1.8 NGOÀI KHỐI ANDROID THEO CHUẨN KOTLIN MỚI ĐỂ KHÔNG BỊ BÁO LỖI DEPRECATED DƯỚI NỀN KTS

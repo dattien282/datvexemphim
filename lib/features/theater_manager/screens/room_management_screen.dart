@@ -1,35 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../../models/room_layout.dart';
+import '../widgets/seat_grid_widget.dart';
 
-/// Định dạng phòng chiếu: quyết định phim gì phù hợp (phụ đề cho phim người
-/// thật, lồng tiếng cho phim hoạt hình) và hạng ghế (VIP/Premium cho rạp lớn).
-/// Suất chiếu (showtimes) denormalize field này từ phòng lúc tạo, để hiển thị
-/// ở showtime_selection_screen.dart mà không cần query thêm.
-const List<String> kRoomFormats = [
-  '2D Phụ đề',
-  '2D Lồng tiếng',
-  'VIP',
-  'Premium',
-  'GoldClass',
-  "L'amour",
-];
+// Bảng cấu hình định dạng phòng (kRoomFormatSpecs), enum SeatLayoutKind, và
+// helper roomFormatsForTheaterSize/findRoomFormatSpec đều sống ở
+// models/room_layout.dart (data domain dùng chung cho cả UI lẫn migration ở
+// db_updater.dart) - ở đây chỉ derive vài hằng số/hàm tiện dùng riêng cho UI.
 
-Color roomFormatColor(String? format) {
-  switch (format) {
-    case 'VIP':
-      return Colors.amber;
-    case 'Premium':
-      return Colors.pinkAccent;
-    case 'GoldClass':
-      return const Color(0xFFD4AF37); // vàng gold đậm, khác VIP amber
-    case "L'amour":
-      return Colors.redAccent;
-    case '2D Lồng tiếng':
-      return Colors.tealAccent;
-    default:
-      return Colors.blueAccent; // '2D Phụ đề' hoặc chưa đặt
-  }
-}
+List<String> get kRoomFormats => kRoomFormatSpecs.map((s) => s.name).toList();
+
+/// Định dạng "cao cấp trở lên": áp giá vé cao hơn phòng thường (xem
+/// seat_booking_screen.dart) và không được áp dụng ưu đãi Thứ 4 (xem
+/// discount_service.dart) - vì đây đã là phân khúc cao cấp, không cần
+/// thêm khuyến mãi giảm giá sâu.
+Set<String> get kPremiumRoomFormats =>
+    kRoomFormatSpecs.where((s) => s.isPremium).map((s) => s.name).toSet();
+
+Color roomFormatColor(String? format) => findRoomFormatSpec(format)?.color ?? Colors.blueAccent;
 
 /// Per-room seat layout, keyed by (theaterName, roomName). Lets each theater
 /// define its own room sizes instead of every room in the app sharing one
@@ -91,7 +79,7 @@ class RoomManagementScreen extends StatelessWidget {
             itemCount: docs.length,
             itemBuilder: (ctx, i) {
               final d = docs[i].data() as Map<String, dynamic>;
-              final format = d['roomFormat'] as String? ?? '2D Phụ đề';
+              final format = d['roomFormat'] as String? ?? 'Standard';
               final color = roomFormatColor(format);
               return Container(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -136,10 +124,13 @@ class RoomManagementScreen extends StatelessWidget {
                           _RoomDialog.show(context, theater: theater, existing: docs[i]);
                         } else if (v == 'delete') {
                           await docs[i].reference.delete();
+                        } else if (v == 'maintenance') {
+                          _SeatMaintenanceDialog.show(context, roomDoc: docs[i]);
                         }
                       },
                       itemBuilder: (_) => [
                         const PopupMenuItem(value: 'edit', child: Text('Chỉnh sửa', style: TextStyle(color: Colors.white))),
+                        const PopupMenuItem(value: 'maintenance', child: Text('Bảo trì ghế', style: TextStyle(color: Colors.orangeAccent))),
                         const PopupMenuItem(value: 'delete', child: Text('Xóa', style: TextStyle(color: Colors.redAccent))),
                       ],
                     ),
@@ -176,6 +167,9 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
   final _sweetCtrl = TextEditingController(text: '2');
   final _perRowCtrl = TextEditingController(text: '10');
   String _format = kRoomFormats.first;
+  // Quy mô rạp (Small/Medium/Large) - quyết định định dạng nào được phép
+  // chọn (roomFormatsForTheaterSize). null trong lúc đang tải.
+  String? _theaterSize;
 
   @override
   void initState() {
@@ -189,49 +183,49 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
       _perRowCtrl.text = '${d['seatsPerRow'] ?? 10}';
       _format = (d['roomFormat'] as String?) ?? kRoomFormats.first;
     }
+    _loadTheaterSize();
+  }
+
+  Future<void> _loadTheaterSize() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('theaters')
+          .where('name', isEqualTo: widget.theater)
+          .limit(1)
+          .get();
+      if (snap.docs.isNotEmpty && mounted) {
+        setState(() => _theaterSize = snap.docs.first.data()['size'] as String? ?? 'Medium');
+      }
+    } catch (_) {
+      // Giữ null (roomFormatsForTheaterSize mặc định coi như 'Medium') nếu lỗi mạng.
+    }
+  }
+
+  // Định dạng hiển thị trong dropdown: giới hạn theo quy mô rạp, nhưng luôn
+  // giữ định dạng hiện tại trong danh sách (kể cả khi không còn phù hợp quy
+  // mô rạp, VD rạp bị đổi size sau khi đã có phòng VIP) để dropdown không bị
+  // lỗi "value không khớp item nào".
+  List<String> _dropdownFormats() {
+    final allowed = roomFormatsForTheaterSize(_theaterSize);
+    return allowed.contains(_format) ? allowed : [...allowed, _format];
   }
 
   // Preset gợi ý ghế theo định dạng phòng khi chọn - quản lý vẫn chỉnh số
-  // lượng được nếu muốn. GoldClass/L'amour tái dùng field 'vipRows'/
-  // 'sweetboxRows' sẵn có (ghế đơn cỡ lớn / ghế đôi) thay vì thêm field mới,
-  // vì cơ chế hiển thị ghế đơn-lớn và ghế đôi đã có sẵn ở seat_booking_screen.dart
-  // - chỉ cần gắn roomFormat để đổi màu/nhãn/kích thước khi render.
+  // lượng được nếu muốn.
   void _applyFormatPreset(String format) {
+    final spec = findRoomFormatSpec(format);
     setState(() {
       _format = format;
-      if (format == 'Premium') {
-        _stdCtrl.text = '0';
-        _vipCtrl.text = '0';
-        _sweetCtrl.text = '3';
-        _perRowCtrl.text = '6';
-      } else if (format == 'GoldClass') {
-        // Toàn bộ ghế đơn cỡ lớn (tái dùng field VIP), không có ghế đôi.
-        _stdCtrl.text = '0';
-        _vipCtrl.text = '4';
-        _sweetCtrl.text = '0';
-        _perRowCtrl.text = '6';
-      } else if (format == "L'amour") {
-        // Toàn bộ phòng chỉ có ghế đôi (tái dùng field Sweetbox).
-        _stdCtrl.text = '0';
-        _vipCtrl.text = '0';
-        _sweetCtrl.text = '4';
-        _perRowCtrl.text = '10';
+      if (spec != null) {
+        _stdCtrl.text = '${spec.standardRows}';
+        _vipCtrl.text = '${spec.vipRows}';
+        _sweetCtrl.text = '${spec.sweetboxRows}';
+        _perRowCtrl.text = '${spec.seatsPerRow}';
       }
     });
   }
 
-  String? _formatHint(String format) {
-    switch (format) {
-      case 'Premium':
-        return "Premium: đã gợi ý hạn chế ghế, chỉ dùng hàng Sweetbox cao cấp nhất. Có thể chỉnh lại số hàng bên dưới.";
-      case 'GoldClass':
-        return "GoldClass: đã gợi ý toàn bộ ghế đơn cỡ lớn (nhập ở 'Hàng VIP'), không có ghế đôi, mỗi hàng ít ghế hơn để có khoảng ngả rộng.";
-      case "L'amour":
-        return "L'amour: đã gợi ý toàn bộ phòng chỉ bán theo ghế đôi (nhập ở 'Hàng Sweetbox'), không có ghế đơn.";
-      default:
-        return null;
-    }
-  }
+  String? _formatHint(String format) => findRoomFormatSpec(format)?.hint;
 
   @override
   void dispose() {
@@ -263,9 +257,17 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
                 contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
               ),
               style: const TextStyle(color: Colors.white, fontSize: 13),
-              items: kRoomFormats.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+              items: _dropdownFormats().map((f) => DropdownMenuItem(value: f, child: Text(f, overflow: TextOverflow.ellipsis))).toList(),
               onChanged: (v) => _applyFormatPreset(v ?? kRoomFormats.first),
             ),
+            if (_theaterSize != null && !roomFormatsForTheaterSize(_theaterSize).contains(_format))
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Định dạng này không còn phù hợp với quy mô rạp hiện tại ($_theaterSize).',
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 10),
+                ),
+              ),
             if (_formatHint(_format) != null)
               Padding(
                 padding: const EdgeInsets.only(top: 6),
@@ -283,7 +285,7 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
               const SizedBox(width: 8),
               Expanded(child: _field(
                   _vipCtrl,
-                  _format == 'GoldClass' ? 'Hàng ghế Gold (đơn, lớn)' : 'Hàng VIP',
+                  findRoomFormatSpec(_format)?.seatLayoutKind == SeatLayoutKind.allSingleLarge ? 'Hàng ghế đơn cỡ lớn' : 'Hàng VIP',
                   Icons.star_rounded,
                   type: TextInputType.number)),
             ]),
@@ -291,7 +293,7 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
             Row(children: [
               Expanded(child: _field(
                   _sweetCtrl,
-                  _format == "L'amour" ? "Hàng ghế đôi L'amour" : 'Hàng Sweetbox',
+                  findRoomFormatSpec(_format)?.seatLayoutKind == SeatLayoutKind.allCouple ? 'Hàng ghế đôi' : 'Hàng Sweetbox',
                   Icons.favorite_rounded,
                   type: TextInputType.number)),
               const SizedBox(width: 8),
@@ -339,6 +341,7 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
       'vipRows': int.tryParse(_vipCtrl.text) ?? 5,
       'sweetboxRows': int.tryParse(_sweetCtrl.text) ?? 2,
       'seatsPerRow': int.tryParse(_perRowCtrl.text) ?? 10,
+      'seatLayoutKind': seatLayoutKindToString(seatLayoutKindForFormat(_format)),
     };
     if (widget.existing != null) {
       await widget.existing!.reference.update(data);
@@ -346,5 +349,104 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
       await FirebaseFirestore.instance.collection('rooms').add(data);
     }
     if (mounted) Navigator.pop(context);
+  }
+}
+
+class _SeatMaintenanceDialog extends StatefulWidget {
+  final QueryDocumentSnapshot roomDoc;
+  const _SeatMaintenanceDialog({required this.roomDoc});
+
+  static Future<void> show(BuildContext context, {required QueryDocumentSnapshot roomDoc}) {
+    return showDialog(context: context, builder: (_) => _SeatMaintenanceDialog(roomDoc: roomDoc));
+  }
+
+  @override
+  State<_SeatMaintenanceDialog> createState() => _SeatMaintenanceDialogState();
+}
+
+class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
+  late RoomLayout _layout;
+  late Set<String> _brokenSeats;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final d = widget.roomDoc.data() as Map<String, dynamic>;
+    _layout = RoomLayout.fromMap(widget.roomDoc.id, d);
+    _brokenSeats = {..._layout.brokenSeats};
+  }
+
+  void _toggleSeat(String seatId) {
+    setState(() {
+      if (_brokenSeats.contains(seatId)) {
+        _brokenSeats.remove(seatId);
+      } else {
+        _brokenSeats.add(seatId);
+      }
+    });
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await widget.roomDoc.reference.update({
+        'brokenSeats': _brokenSeats.toList(),
+      });
+      if (mounted) Navigator.pop(context);
+    } catch (e) {
+      setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF1E1E2A),
+      title: const Text('Bảo trì ghế', style: TextStyle(color: Colors.orangeAccent)),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Chạm vào ghế để đánh dấu hỏng/bảo trì', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 20),
+              // Screen curve
+              Container(
+                height: 40,
+                alignment: Alignment.bottomCenter,
+                decoration: const BoxDecoration(
+                  border: Border(
+                    top: BorderSide(color: Colors.white38, width: 2),
+                  ),
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.elliptical(200, 30),
+                    topRight: Radius.elliptical(200, 30),
+                  ),
+                ),
+                child: const Text('MÀN HÌNH', style: TextStyle(color: Colors.white54, fontSize: 10, letterSpacing: 2)),
+              ),
+              const SizedBox(height: 30),
+              SeatGridView(
+                layout: _layout,
+                mode: SeatGridMode.maintenance,
+                brokenSeats: _brokenSeats,
+                onToggleBroken: _toggleSeat,
+                dense: true,
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Hủy', style: TextStyle(color: Colors.white54))),
+        ElevatedButton(
+          onPressed: _saving ? null : _save,
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.orangeAccent),
+          child: _saving ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)) : const Text('Lưu', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    );
   }
 }

@@ -88,13 +88,35 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
 
     setState(() => _isSubmittingReview = true);
     try {
+      // Chỉ cho phép đánh giá nếu tài khoản đã có vé COMPLETED cho đúng phim
+      // này - trước đây bất kỳ ai đăng nhập cũng review được phim bất kỳ mà
+      // chưa từng mua vé, dễ bị spam review ảo. ticketId được ghim vào review
+      // để firestore.rules xác minh lại đúng điều kiện này ở server, không
+      // chỉ chặn ở UI.
+      final ticketSnap = await FirebaseFirestore.instance
+          .collection('tickets')
+          .where('userId', isEqualTo: user.uid)
+          .where('movieTitle', isEqualTo: widget.movieData['title'])
+          .where('paymentStatus', isEqualTo: 'COMPLETED')
+          .limit(1)
+          .get();
+      if (ticketSnap.docs.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Bạn cần đã xem phim này (có vé đã thanh toán) mới được đánh giá.'), backgroundColor: Colors.orangeAccent),
+          );
+        }
+        return;
+      }
+
       await FirebaseFirestore.instance.collection('movie_reviews').add({
         'movieTitle': widget.movieData['title'],
         'email': user.email,
+        'ticketId': ticketSnap.docs.first.id,
         'rating': _selectedRating,
         'comment': text,
         'created_at': Timestamp.now(),
-        'likes': [], 
+        'likes': [],
       });
       _reviewController.clear();
       setState(() {

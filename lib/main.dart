@@ -54,6 +54,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Stella Cinema',
+      debugShowCheckedModeBanner: false, // tắt dải "DEBUG" đỏ ở góc màn hình
       theme: ThemeData.dark(),
       builder: (context, child) {
         return Stack(

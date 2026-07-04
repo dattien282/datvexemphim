@@ -4,7 +4,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/constants.dart';
-import '../../theater_manager/screens/room_management_screen.dart' show roomFormatColor;
+import 'package:dat_ve_xem_phim_group5/features/theater_manager/screens/room_management_screen.dart' show roomFormatColor;
+import '../../../models/room_layout.dart';
+import '../../booking_and_payment/services/pricing_service.dart';
+import '../../booking_and_payment/services/seat_reservation_service.dart';
+import '../../theater_manager/widgets/seat_grid_widget.dart';
 
 /// Bán vé tại quầy cho khách vãng lai (không có tài khoản/app) - trước đây
 /// staff chỉ soát được vé đã đặt sẵn qua app, không có cách nào tạo vé mới
@@ -25,13 +29,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
   final _customerNameCtrl = TextEditingController();
   bool _saving = false;
 
-  int _standardRows = 3, _vipRows = 5, _sweetboxRows = 2, _seatsPerRow = 10;
-  Set<String> _brokenSeats = {};
-
-  List<String> get _allRowLabels =>
-      List.generate(_standardRows + _vipRows + _sweetboxRows, (i) => String.fromCharCode('A'.codeUnitAt(0) + i));
-  List<String> get _vipRowLabels => _allRowLabels.sublist(_standardRows, _standardRows + _vipRows);
-  List<String> get _sweetboxRowLabels => _allRowLabels.sublist(_standardRows + _vipRows);
+  RoomLayout _layout = const RoomLayout(theaterName: '', roomName: '', roomFormat: 'Standard');
 
   @override
   void dispose() {
@@ -43,10 +41,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
     setState(() {
       _selectedShowtime = doc;
       _selectedSeats.clear();
-      _standardRows = 3;
-      _vipRows = 5;
-      _sweetboxRows = 2;
-      _seatsPerRow = 10;
+      _layout = const RoomLayout(theaterName: '', roomName: '', roomFormat: 'Standard');
     });
     final d = doc.data() as Map<String, dynamic>;
     final roomName = d['roomName'] as String?;
@@ -58,21 +53,36 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
         .limit(1)
         .get();
     if (roomSnap.docs.isEmpty || !mounted) return;
-    final rd = roomSnap.docs.first.data();
+    final roomDoc = roomSnap.docs.first;
     setState(() {
-      _standardRows = (rd['standardRows'] as num? ?? 3).toInt();
-      _vipRows = (rd['vipRows'] as num? ?? 5).toInt();
-      _sweetboxRows = (rd['sweetboxRows'] as num? ?? 2).toInt();
-      _seatsPerRow = (rd['seatsPerRow'] as num? ?? 10).toInt();
-      _brokenSeats = ((rd['brokenSeats'] as List?) ?? []).map((e) => e.toString()).toSet();
+      _layout = RoomLayout.fromMap(roomDoc.id, roomDoc.data());
     });
   }
 
-  int _seatPrice(String seatId, int priceStandard, int priceVip) {
-    final row = seatId[0];
-    if (_sweetboxRowLabels.contains(row)) return priceVip + 80000;
-    if (_vipRowLabels.contains(row)) return priceVip;
-    return priceStandard;
+  int _seatPrice(String seatId, int priceStandard, int priceVip) =>
+      seatBasePrice(seatId: seatId, layout: _layout, priceStandard: priceStandard, priceVip: priceVip);
+
+  // Kiểm tra trước (best-effort, không transaction) xem có ghế nào đang được
+  // khách giữ qua app (temporary_locks) không - trước đây staff bán tại quầy
+  // hoàn toàn bỏ qua bảng khoá này, chỉ check vé đã hoàn tất, nên có thể bán
+  // trùng đúng lúc khách đang thao tác chọn ghế đó trên app.
+  Future<Set<String>> _fetchActiveLockedSeats(Map<String, dynamic> showtimeData) async {
+    final now = DateTime.now();
+    final snap = await FirebaseFirestore.instance
+        .collection('temporary_locks')
+        .where('theater', isEqualTo: widget.theater)
+        .where('date', isEqualTo: showtimeData['date'])
+        .where('time', isEqualTo: showtimeData['time'])
+        .get();
+    final locked = <String>{};
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final expiresAt = (data['expiresAt'] as Timestamp?)?.toDate();
+      if (expiresAt != null && expiresAt.isAfter(now)) {
+        locked.add(data['seatId'] as String);
+      }
+    }
+    return locked;
   }
 
   Future<void> _confirmSale() async {
@@ -82,6 +92,21 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
     final priceStandard = (d['priceStandard'] as num? ?? 90000).toInt();
     final priceVip = (d['priceVip'] as num? ?? 120000).toInt();
     final total = _selectedSeats.fold<int>(0, (sum, s) => sum + _seatPrice(s, priceStandard, priceVip));
+
+    final lockedSeats = await _fetchActiveLockedSeats(d);
+    final conflictingSeats = _selectedSeats.where(lockedSeats.contains).toList();
+    if (conflictingSeats.isNotEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Ghế ${conflictingSeats.join(", ")} đang được khách giữ qua app, vui lòng chọn ghế khác.'),
+            backgroundColor: Colors.orangeAccent,
+          ),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -107,31 +132,57 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
 
     setState(() => _saving = true);
     try {
-      final ticketRef = await FirebaseFirestore.instance.collection('tickets').add({
-        'orderCode': DateTime.now().millisecondsSinceEpoch % 1000000,
-        'userId': staff?.uid,
-        'email': _customerNameCtrl.text.trim().isEmpty ? (staff?.email ?? 'quầy vé') : _customerNameCtrl.text.trim(),
-        'movieTitle': d['movieTitle'],
-        'posterUrl': '',
-        'seats': _selectedSeats,
-        'combos': const [],
-        'ticketAmount': total,
-        'discountAmount': 0,
-        'totalAmount': total,
-        'voucherCode': null,
-        'paymentMethod': 'cash_counter',
-        'paymentStatus': 'COMPLETED',
-        'theaterName': widget.theater,
-        'showDate': d['date'],
-        'showTime': d['time'],
-        'showtime': '${widget.theater} | ${d['date']} | ${d['time']}',
-        'roomName': d['roomName'],
-        'roomFormat': d['roomFormat'],
-        'soldByStaffUid': staff?.uid,
-        'soldByStaffEmail': staff?.email,
-        'createdAt': Timestamp.now(),
-        'paidAt': Timestamp.now(),
+      final showtimeId = _selectedShowtime!.id;
+      final seatIds = List<String>.from(_selectedSeats);
+      final ticketRef = FirebaseFirestore.instance.collection('tickets').doc();
+
+      // Bọc trong transaction để xác thực lại ghế còn trống ngay tại thời
+      // điểm ghi vé - chặn trường hợp 2 giao dịch (VD: staff bán tại quầy +
+      // khách thanh toán qua app) cùng thắng 1 ghế nếu cả 2 gần như đồng thời.
+      final reserved = await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final seatsAvailable = await areSeatsAvailable(transaction, showtimeId: showtimeId, seatIds: seatIds);
+        if (!seatsAvailable) return false;
+
+        reserveSeats(transaction, showtimeId: showtimeId, seatIds: seatIds);
+        transaction.set(ticketRef, {
+          'orderCode': DateTime.now().millisecondsSinceEpoch % 1000000,
+          'userId': staff?.uid,
+          'showtimeId': showtimeId,
+          'email': _customerNameCtrl.text.trim().isEmpty ? (staff?.email ?? 'quầy vé') : _customerNameCtrl.text.trim(),
+          'movieTitle': d['movieTitle'],
+          'posterUrl': '',
+          'seats': _selectedSeats,
+          'combos': const [],
+          'ticketAmount': total,
+          'discountAmount': 0,
+          'totalAmount': total,
+          'voucherCode': null,
+          'paymentMethod': 'cash_counter',
+          'paymentStatus': 'COMPLETED',
+          'theaterName': widget.theater,
+          'showDate': d['date'],
+          'showTime': d['time'],
+          'showtime': '${widget.theater} | ${d['date']} | ${d['time']}',
+          'roomName': d['roomName'],
+          'roomFormat': d['roomFormat'],
+          'language': d['language'] ?? 'Phụ đề',
+          'sessionType': d['sessionType'] ?? 'Standard',
+          'soldByStaffUid': staff?.uid,
+          'soldByStaffEmail': staff?.email,
+          'createdAt': Timestamp.now(),
+          'paidAt': Timestamp.now(),
+        });
+        return true;
       });
+
+      if (!reserved) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Ghế vừa được đặt bởi giao dịch khác, vui lòng chọn lại ghế.'), backgroundColor: Colors.redAccent),
+          );
+        }
+        return;
+      }
 
       // Ký QR giống vé mua qua app để staff khác vẫn check-in bình thường.
       try {
@@ -212,7 +263,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                           final d = doc.data() as Map<String, dynamic>;
                           return DropdownMenuItem<String>(
                             value: doc.id,
-                            child: Text('${d['movieTitle']} • ${d['date']} ${d['time']} • ${d['roomName'] ?? ''}',
+                            child: Text('${d['movieTitle']} • ${d['date']} ${d['time']} • ${d['roomName'] ?? ''} • ${d['language'] ?? 'Phụ đề'} • ${d['sessionType'] ?? 'Standard'}',
                                 overflow: TextOverflow.ellipsis),
                           );
                         }).toList(),
@@ -270,7 +321,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
           .where('showTime', isEqualTo: time)
           .snapshots(),
       builder: (context, snap) {
-        final bookedSeats = <String>{};
+        final bookedSeats = <String>{..._layout.brokenSeats};
         for (final doc in snap.data?.docs ?? []) {
           final td = doc.data() as Map<String, dynamic>;
           if (td['paymentStatus'] != 'CANCELLED') {
@@ -288,66 +339,23 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                     padding: const EdgeInsets.only(bottom: 8),
                     child: Text(roomFormat, style: TextStyle(color: roomFormatColor(roomFormat), fontSize: 11, fontWeight: FontWeight.bold)),
                   ),
-                for (final row in _allRowLabels.sublist(0, _standardRows + _vipRows))
-                  _buildRow(row, bookedSeats, isSweetbox: false),
-                if (_sweetboxRows > 0) ...[
-                  const SizedBox(height: 10),
-                  const Text('GHẾ ĐÔI', style: TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                  for (final row in _sweetboxRowLabels) _buildRow(row, bookedSeats, isSweetbox: true),
-                ],
+                SeatGridView(
+                  layout: _layout,
+                  selectedSeats: _selectedSeats.toSet(),
+                  bookedSeats: bookedSeats,
+                  onSeatTap: (seatId) => setState(() {
+                    if (_selectedSeats.contains(seatId)) {
+                      _selectedSeats.remove(seatId);
+                    } else {
+                      _selectedSeats.add(seatId);
+                    }
+                  }),
+                ),
               ],
             ),
           ),
         );
       },
-    );
-  }
-
-  Widget _buildRow(String row, Set<String> bookedSeats, {required bool isSweetbox}) {
-    final isVip = _vipRowLabels.contains(row);
-    final count = isSweetbox ? (_seatsPerRow / 2).floor() : _seatsPerRow;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        SizedBox(width: 20, child: Text(row, textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold))),
-        ...List.generate(count, (i) {
-          final seatId = isSweetbox ? '$row${i * 2 + 1}-$row${i * 2 + 2}' : '$row${i + 1}';
-          final isBooked = bookedSeats.contains(seatId) || _brokenSeats.contains(seatId);
-          final isSelected = _selectedSeats.contains(seatId);
-          Color color = const Color(0xFF222232);
-          if (isBooked) {
-            color = Colors.redAccent.withValues(alpha: 0.3);
-          } else if (isSelected) {
-            color = Colors.amber;
-          } else if (isSweetbox) {
-            color = const Color(0xFF3A2232);
-          } else if (isVip) {
-            color = const Color(0xFF322A1E);
-          }
-          return GestureDetector(
-            onTap: isBooked
-                ? null
-                : () => setState(() {
-                      if (isSelected) {
-                        _selectedSeats.remove(seatId);
-                      } else {
-                        _selectedSeats.add(seatId);
-                      }
-                    }),
-            child: Container(
-              margin: const EdgeInsets.all(2),
-              width: isSweetbox ? 50 : 26,
-              height: 26,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(5)),
-              child: Text(
-                isSweetbox ? '${i * 2 + 1}•${i * 2 + 2}' : '${i + 1}',
-                style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontSize: 9, fontWeight: FontWeight.bold),
-              ),
-            ),
-          );
-        }),
-      ],
     );
   }
 

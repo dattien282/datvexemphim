@@ -11,6 +11,7 @@ import '../../chat_ai/screens/cinema_ai_chatbot_screen.dart';
 import '../../maps/screens/theater_maps_screen.dart';
 import '../../auth/screens/login_screen.dart';
 import '../../auth/screens/profile_screen.dart';
+import '../../auth/screens/membership_screen.dart';
 import '../../booking_and_payment/screens/movie_detail_screen.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../viewmodels/movie_viewmodel.dart';
@@ -77,8 +78,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
       imageUrl: 'https://images.unsplash.com/photo-1585647347483-22b66260dfff?w=800&q=80',
       badge: 'KHUYẾN MÃI',
       badgeColor: Color(0xFF2E7D32),
-      title: 'COMBO CUỐI TUẦN',
-      subtitle: 'Mua 2 vé + 2 bắp nước chỉ từ 299.000đ • T7 & CN',
+      title: 'THỨ 4 VUI VẺ',
+      subtitle: 'Đồng giá vé 70K toàn hệ thống (Áp dụng cho mọi khung giờ) 🥳',
       action: _BannerAction.combo,
     ),
     _BannerItem(
@@ -610,7 +611,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
       case _BannerAction.profile:
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const ProfileScreen()),
+          MaterialPageRoute(builder: (_) => const MembershipScreen()),
         );
         break;
       case _BannerAction.voucher:
@@ -771,8 +772,58 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 1. Banner Carousel – widget riêng, setState không ảnh hưởng HomeScreen
+                  // 1. Banner Carousel -> widget riêng, setState không ảnh hưởng HomeScreen
                   _BannerCarousel(items: bannerItems, onTap: _handleBannerTap),
+
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [const Color(0xFF1A1A1A), Colors.amber.shade900.withValues(alpha: 0.7)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.amber.withValues(alpha: 0.15),
+                          blurRadius: 8,
+                          offset: const Offset(0, 4),
+                        )
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.stars_rounded, color: Colors.amber, size: 28),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: const [
+                              Text(
+                                'STELLA HAPPY WEDNESDAY',
+                                style: TextStyle(color: Colors.amber, fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 0.5),
+                              ),
+                              SizedBox(height: 4),
+                              Text(
+                                'Đồng giá 50K tất cả cụm rạp vào Thứ 4 hàng tuần. Đặt vé ngay!',
+                                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                   // 2. Search Bar – ValueNotifier thay setState
                   Padding(

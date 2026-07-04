@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../theater_manager/screens/room_management_screen.dart' show kPremiumRoomFormats;
 
 final discountServiceProvider = Provider((ref) => DiscountService());
 
@@ -34,8 +35,19 @@ class VoucherResult {
 class DiscountService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  Future<DiscountResult> calculateDiscounts(String userEmail) async {
-    bool isWednesday = DateTime.now().weekday == DateTime.wednesday;
+  // roomFormat: định dạng phòng của suất chiếu đang đặt (nếu có). Phòng cao
+  // cấp trở lên (xem kPremiumRoomFormats) không được cộng thêm ưu đãi Thứ 4,
+  // vì đây đã là phân khúc giá cao hơn phòng thường.
+  //
+  // Lưu ý: "Happy Wednesday" ở đây cố ý dựa theo NGÀY ĐẶT VÉ (DateTime.now(),
+  // giảm % trên tổng hoá đơn) - khác với ưu đãi Thứ 4 ở
+  // seat_booking_screen.dart/pricing_service.dart (đồng giá 50k/100k mỗi ghế,
+  // dựa theo NGÀY CỦA SUẤT CHIẾU thật - showtimeSurcharge.isWednesday). Đây là
+  // 2 quy tắc nghiệp vụ khác nhau, có thể lệch nhau khi đặt vé trước cho suất
+  // chiếu ở Thứ 4 tuần sau - cố tình không gộp làm một.
+  Future<DiscountResult> calculateDiscounts(String userEmail, {String? roomFormat}) async {
+    final isPremiumFormat = kPremiumRoomFormats.contains(roomFormat);
+    bool isWednesday = DateTime.now().weekday == DateTime.wednesday && !isPremiumFormat;
     int wednesdayPct = isWednesday ? 10 : 0;
 
     int totalSpent = 0;

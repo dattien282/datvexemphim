@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'admin_audit_log.dart';
+import '../../../utils/db_updater.dart';
 
 /// Cấu hình chung của server (Gemini API key...) qua UI thay vì phải sửa tay
 /// file backend-payos/.env rồi restart server - server.js đọc
@@ -18,6 +19,9 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
   bool _obscure = true;
   bool _loading = true;
   bool _saving = false;
+  bool _isUpdatingDb = false;
+  bool _isMigratingShowtimes = false;
+  bool _isMigratingFormats = false;
 
   @override
   void initState() {
@@ -62,6 +66,54 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
       }
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _runDbUpdater() async {
+    setState(() => _isUpdatingDb = true);
+    try {
+      await updateTheaterSizesAndSeedShowtimes();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cập nhật DB thành công!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isUpdatingDb = false);
+    }
+  }
+
+  Future<void> _runShowtimeMigration() async {
+    setState(() => _isMigratingShowtimes = true);
+    try {
+      await migrateShowtimesToTimestamp();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã backfill showAt cho các suất chiếu cũ!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isMigratingShowtimes = false);
+    }
+  }
+
+  Future<void> _runRoomFormatMigration() async {
+    setState(() => _isMigratingFormats = true);
+    try {
+      await migrateRoomFormatsToStellaBranding();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã đổi định dạng phòng cũ sang hệ Stella Cinema!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isMigratingFormats = false);
     }
   }
 
@@ -131,6 +183,64 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
                       child: _saving
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
                           : const Text('LƯU CẤU HÌNH', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _isUpdatingDb ? null : _runDbUpdater,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueAccent,
+                        disabledBackgroundColor: Colors.white10,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: _isUpdatingDb
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('CẬP NHẬT DB (THEATER & SHOWTIMES)', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Backfill "showAt" (Timestamp) cho các suất chiếu cũ chưa có field này - sửa lỗi ngày tháng lẫn 2 định dạng string.',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _isMigratingShowtimes ? null : _runShowtimeMigration,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.deepPurpleAccent,
+                        disabledBackgroundColor: Colors.white10,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: _isMigratingShowtimes
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('MIGRATE SHOWTIMES → showAt', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Đổi tên định dạng phòng cũ (VIP, GoldClass, Premium, L\'amour, IMAX, 4DX, ScreenX, 2D Phụ đề/Lồng tiếng) sang hệ định dạng riêng của Stella Cinema cho rooms và showtimes.',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _isMigratingFormats ? null : _runRoomFormatMigration,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.teal,
+                        disabledBackgroundColor: Colors.white10,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: _isMigratingFormats
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('MIGRATE ĐỊNH DẠNG PHÒNG → STELLA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],

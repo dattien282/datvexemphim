@@ -110,6 +110,8 @@ class _UserCard extends StatelessWidget {
       case UserRole.theaterManager: return Colors.deepPurpleAccent;
       case UserRole.staff: return Colors.tealAccent;
       case UserRole.user: return Colors.lightBlueAccent;
+      case UserRole.accountant: return Colors.greenAccent;
+      case UserRole.marketing: return Colors.pinkAccent;
     }
   }
 
@@ -119,6 +121,8 @@ class _UserCard extends StatelessWidget {
       case UserRole.theaterManager: return Icons.business_rounded;
       case UserRole.staff: return Icons.badge_rounded;
       case UserRole.user: return Icons.person_rounded;
+      case UserRole.accountant: return Icons.account_balance_rounded;
+      case UserRole.marketing: return Icons.campaign_rounded;
     }
   }
 

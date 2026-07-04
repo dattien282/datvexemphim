@@ -1,9 +1,12 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+
+import '../../../core/constants.dart';
 
 /// Tài khoản không có birthDate (vd. đăng nhập Google chưa từng khai ngày
 /// sinh) muốn đặt vé phim T18 phải tải CCCD 2 mặt lên để admin duyệt thủ
@@ -33,6 +36,45 @@ class _AgeVerificationScreenState extends State<AgeVerificationScreen> {
     });
   }
 
+  // Ảnh CCCD là dữ liệu nhạy cảm - trước đây dùng "unsigned upload preset" của
+  // Cloudinary, cho phép BẤT KỲ AI (không cần đăng nhập) upload thẳng lên vì
+  // cloud name + preset bị hardcode sẵn trong app (trích xuất được bằng cách
+  // decompile). Giờ phải xin chữ ký từ backend (yêu cầu Firebase ID token hợp
+  // lệ) qua /cloudinary-sign trước - Cloudinary chỉ chấp nhận đúng chữ ký đó,
+  // và public_id chứa UUID ngẫu nhiên nên URL ảnh khó dò ra dù vẫn public.
+  Future<String?> _uploadToCloudinary(File file, String kind) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    final idToken = await user.getIdToken();
+
+    final signRes = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/cloudinary-sign'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+      body: jsonEncode({'kind': kind}),
+    ).timeout(const Duration(seconds: 10));
+    final signData = jsonDecode(signRes.body);
+    if (signData['success'] != true) return null;
+
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/${signData['cloudName']}/image/upload');
+    final request = http.MultipartRequest('POST', url)
+      ..fields['api_key'] = signData['apiKey']
+      ..fields['timestamp'] = signData['timestamp'].toString()
+      ..fields['public_id'] = signData['publicId']
+      ..fields['signature'] = signData['signature']
+      ..files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    final response = await request.send();
+    if (response.statusCode == 200) {
+      final responseData = await response.stream.bytesToString();
+      final jsonMap = jsonDecode(responseData);
+      return jsonMap['secure_url'];
+    }
+    return null;
+  }
+
   Future<void> _submit() async {
     if (_frontImage == null || _backImage == null) return;
     final user = FirebaseAuth.instance.currentUser;
@@ -41,12 +83,13 @@ class _AgeVerificationScreenState extends State<AgeVerificationScreen> {
     setState(() => _submitting = true);
     try {
       final requestId = FirebaseFirestore.instance.collection('age_verification_requests').doc().id;
-      final frontRef = FirebaseStorage.instance.ref('age_verification/${user.uid}/${requestId}_front.jpg');
-      final backRef = FirebaseStorage.instance.ref('age_verification/${user.uid}/${requestId}_back.jpg');
-      await frontRef.putFile(_frontImage!);
-      await backRef.putFile(_backImage!);
-      final frontUrl = await frontRef.getDownloadURL();
-      final backUrl = await backRef.getDownloadURL();
+
+      final frontUrl = await _uploadToCloudinary(_frontImage!, 'front');
+      final backUrl = await _uploadToCloudinary(_backImage!, 'back');
+
+      if (frontUrl == null || backUrl == null) {
+        throw Exception('Upload ảnh thất bại. Vui lòng thử lại.');
+      }
 
       await FirebaseFirestore.instance.collection('age_verification_requests').doc(requestId).set({
         'userId': user.uid,
@@ -55,6 +98,16 @@ class _AgeVerificationScreenState extends State<AgeVerificationScreen> {
         'backUrl': backUrl,
         'status': 'pending',
         'createdAt': Timestamp.now(),
+      });
+
+      // Gửi thông báo cho user
+      await FirebaseFirestore.instance.collection('notifications').add({
+        'userId': user.uid,
+        'title': 'Yêu cầu Xác minh độ tuổi',
+        'body': 'Ảnh CCCD của bạn đã được tải lên thành công. Vui lòng chờ Admin phê duyệt để có thể đặt vé phim T18+.',
+        'type': 'verification_pending',
+        'isRead': false,
+        'createdAt': FieldValue.serverTimestamp(),
       });
 
       if (mounted) {

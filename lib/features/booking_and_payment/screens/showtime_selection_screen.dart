@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import '../../../providers/theaters_provider.dart';
+import '../../../models/showtime.dart';
 import '../../theater_manager/screens/room_management_screen.dart' show roomFormatColor;
 import 'seat_booking_screen.dart';
 
@@ -15,12 +17,15 @@ class ShowtimeSelectionScreen extends ConsumerStatefulWidget {
 
 class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScreen> {
   String? _selectedTheater;
-  String? _selectedDate;
+  // Khoá nhóm ngày dạng 'yyyy-MM-dd' suy ra từ showAt thật của suất chiếu -
+  // không dùng trực tiếp field 'date' thô của Firestore vì tài liệu cũ có thể
+  // vẫn ở định dạng string khác (xem models/showtime.dart).
+  String? _selectedDateKey;
   String? _selectedTime;
   // Suất chiếu thật (do theater_manager tạo trong collection 'showtimes')
   // khớp rạp + phim đã chọn. null = chưa tra cứu; [] = tra cứu xong, không có.
-  List<QueryDocumentSnapshot>? _realShowtimes;
-  QueryDocumentSnapshot? _selectedShowtimeDoc;
+  List<Showtime>? _realShowtimes;
+  Showtime? _selectedShowtime;
 
   @override
   void initState() {
@@ -30,8 +35,8 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
   Future<void> _loadRealShowtimes(String theater) async {
     setState(() {
       _realShowtimes = null;
-      _selectedShowtimeDoc = null;
-      _selectedDate = null;
+      _selectedShowtime = null;
+      _selectedDateKey = null;
       _selectedTime = null;
     });
     final movieTitle = widget.movieData['title'];
@@ -42,20 +47,17 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
         .where('status', isEqualTo: 'active')
         .get();
     if (!mounted) return;
-    final docs = snap.docs.toList()
-      ..sort((a, b) {
-        final ad = '${a['date']} ${a['time']}';
-        final bd = '${b['date']} ${b['time']}';
-        return ad.compareTo(bd);
-      });
+    final now = DateTime.now();
+    final showtimes = snap.docs
+        .map((d) => Showtime.fromMap(d.id, d.data()))
+        .where((s) => s.showAt != null && s.showAt!.isAfter(now))
+        .toList()
+      ..sort((a, b) => a.showAt!.compareTo(b.showAt!));
     setState(() {
-      _realShowtimes = docs;
-      if (docs.isNotEmpty) {
+      _realShowtimes = showtimes;
+      if (showtimes.isNotEmpty) {
         // Tự động chọn ngày đầu tiên có suất chiếu
-        final dates = docs.map((d) => (d.data() as Map)['date'] as String).toSet().toList()..sort();
-        if (dates.isNotEmpty) {
-          _selectedDate = dates.first;
-        }
+        _selectedDateKey = Showtime.isoDate(showtimes.first.showAt!);
       }
     });
   }
@@ -118,7 +120,7 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
               ),
               style: const TextStyle(color: Colors.white, fontSize: 13),
               hint: const Text('Vui lòng chọn cụm rạp gần bạn', style: TextStyle(color: Colors.white38, fontSize: 13)),
-              value: _selectedTheater,
+              initialValue: _selectedTheater,
               items: theaterNames.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
               onChanged: (val) {
                 setState(() => _selectedTheater = val);
@@ -148,19 +150,28 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
             SizedBox(
               width: double.infinity, height: 48,
               child: ElevatedButton(
-                onPressed: (_selectedTheater == null || _selectedDate == null || _selectedTime == null) ? null : () {
+                onPressed: (_selectedTheater == null || _selectedDateKey == null || _selectedTime == null) ? null : () {
                   // Đóng gói toàn bộ thông tin lịch trình truyền tiếp sang file sơ đồ ghế
                   final Map<String, dynamic> completeMovieData = Map.from(widget.movieData);
                   completeMovieData['selectedTheater'] = _selectedTheater;
-                  completeMovieData['selectedDate'] = _selectedDate;
                   completeMovieData['selectedTime'] = _selectedTime;
-                  if (_selectedShowtimeDoc != null) {
-                    final d = _selectedShowtimeDoc!.data() as Map<String, dynamic>;
-                    completeMovieData['showtimeId'] = _selectedShowtimeDoc!.id;
-                    completeMovieData['priceStandard'] = d['priceStandard'];
-                    completeMovieData['priceVip'] = d['priceVip'];
-                    completeMovieData['roomName'] = d['roomName'];
-                    completeMovieData['roomFormat'] = d['roomFormat'];
+                  final s = _selectedShowtime;
+                  if (s != null) {
+                    completeMovieData['showtimeId'] = s.id;
+                    completeMovieData['priceStandard'] = s.priceStandard;
+                    completeMovieData['priceVip'] = s.priceVip;
+                    completeMovieData['roomName'] = s.roomName;
+                    completeMovieData['roomFormat'] = s.roomFormat;
+                    completeMovieData['language'] = s.language;
+                    completeMovieData['sessionType'] = s.sessionType;
+                    if (s.showAt != null) {
+                      // showAt truyền dạng millis (Map vẫn Map<String,dynamic>,
+                      // không đổi hẳn sang model ở seat_booking_screen.dart) để
+                      // tính giờ/ngày thật ở đó thay vì string-match như trước.
+                      completeMovieData['showAt'] = s.showAt!.millisecondsSinceEpoch;
+                      completeMovieData['selectedDate'] =
+                          '${Showtime.vietnameseWeekday(s.showAt!.weekday)}, ${DateFormat('dd/MM').format(s.showAt!)}';
+                    }
                   }
 
                   Navigator.push(
@@ -180,12 +191,31 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
 
   // ── Suất chiếu thật (từ collection 'showtimes' do theater_manager tạo) ──
   List<Widget> _buildRealShowtimeSelectors() {
-    final docs = _realShowtimes!;
-    final dates = docs.map((d) => (d.data() as Map)['date'] as String).toSet().toList()..sort();
-    final timesForDate = docs
-        .where((d) => (d.data() as Map)['date'] == _selectedDate)
-        .toList()
-      ..sort((a, b) => ((a.data() as Map)['time'] as String).compareTo((b.data() as Map)['time'] as String));
+    final showtimes = _realShowtimes!; // đã lọc showAt != null và sort tăng dần
+    
+    // Lấy ngày hôm nay theo quy tắc 6h sáng
+    final now = DateTime.now();
+    final logicalToday = Showtime.logicalShowDate(now);
+    final todayMidnight = DateTime(logicalToday.year, logicalToday.month, logicalToday.day);
+    
+    // Tạo dải 7 ngày cố định
+    final dateKeys = List.generate(7, (i) => Showtime.isoDate(todayMidnight.add(Duration(days: i))));
+    
+    // Khởi tạo _selectedDateKey nếu chưa chọn hoặc ngày cũ không nằm trong 7 ngày tới
+    if (_selectedDateKey == null || !dateKeys.contains(_selectedDateKey)) {
+      // Lưu ý: Dart cho phép gán biến thường trong build phase
+      _selectedDateKey = dateKeys.first;
+    }
+
+    final showtimesForDate = showtimes.where((s) {
+      if (s.showAt == null) return false;
+      return Showtime.isoDate(Showtime.logicalShowDate(s.showAt!)) == _selectedDateKey;
+    }).toList();
+
+    // Tính thời lượng phim để dự báo giờ ra về
+    final durationStr = widget.movieData['duration'] as String? ?? '120';
+    final match = RegExp(r'\d+').firstMatch(durationStr);
+    final durationMins = match != null ? int.parse(match.group(0)!) : 120;
 
     return [
       const Text('2. CHỌN NGÀY XEM PHIM', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
@@ -194,15 +224,19 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
         height: 45,
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
-          itemCount: dates.length,
+          itemCount: dateKeys.length,
           itemBuilder: (context, index) {
-            final date = dates[index];
-            final isSelected = _selectedDate == date;
+            final dateKey = dateKeys[index];
+            final sampleDate = todayMidnight.add(Duration(days: index));
+            final prefix = index == 0 ? 'Hôm nay' : Showtime.vietnameseWeekday(sampleDate.weekday);
+            final label = '$prefix, ${DateFormat('dd/MM').format(sampleDate)}';
+            final isSelected = _selectedDateKey == dateKey;
+            
             return GestureDetector(
               onTap: () => setState(() {
-                _selectedDate = date;
+                _selectedDateKey = dateKey;
                 _selectedTime = null;
-                _selectedShowtimeDoc = null;
+                _selectedShowtime = null;
               }),
               child: Container(
                 margin: const EdgeInsets.only(right: 10),
@@ -212,7 +246,7 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
                   borderRadius: BorderRadius.circular(10),
                 ),
                 alignment: Alignment.center,
-                child: Text(date, style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
+                child: Text(label, style: TextStyle(color: isSelected ? Colors.black : Colors.white70, fontWeight: FontWeight.bold, fontSize: 12)),
               ),
             );
           },
@@ -221,48 +255,91 @@ class _ShowtimeSelectionScreenState extends ConsumerState<ShowtimeSelectionScree
       const SizedBox(height: 25),
       const Text('3. CHỌN KHUNG GIỜ CHIẾU', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
       const SizedBox(height: 12),
-      if (_selectedDate == null)
-        const Text('Chọn ngày để xem khung giờ.', style: TextStyle(color: Colors.white38, fontSize: 12))
+      if (showtimesForDate.isEmpty)
+        const Text('Hiện chưa có lịch chiếu nào được xếp cho ngày này.', style: TextStyle(color: Colors.white38, fontSize: 12, fontStyle: FontStyle.italic))
       else
-        // Cùng 1 khung giờ có thể có nhiều suất chiếu riêng biệt (khác phòng/
-        // định dạng: 2D Phụ đề, 2D Lồng tiếng, VIP, Premium) - so sánh theo
-        // doc.id thay vì chuỗi giờ để không gộp nhầm 2 suất trùng giờ khác phòng.
-        GridView.builder(
-          shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 1.7),
-          itemCount: timesForDate.length,
-          itemBuilder: (context, index) {
-            final doc = timesForDate[index];
-            final data = doc.data() as Map;
-            final time = data['time'] as String;
-            final format = data['roomFormat'] as String? ?? '2D Phụ đề';
-            final isSelected = _selectedShowtimeDoc?.id == doc.id;
-            final formatColor = roomFormatColor(format);
-            return GestureDetector(
-              onTap: () => setState(() {
-                _selectedTime = time;
-                _selectedShowtimeDoc = doc;
-              }),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: isSelected ? Colors.amber : const Color(0xFF0A0A0A),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: isSelected ? Colors.white : Colors.white.withValues(alpha: 0.05)),
+        // Gom nhóm theo định dạng (roomFormat + language) giống Galaxy Cinema
+        ...(() {
+          final grouped = <String, List<Showtime>>{};
+          for (final s in showtimesForDate) {
+            final formatName = s.roomFormat == 'Standard' ? '2D' : s.roomFormat.toUpperCase();
+            final groupName = formatName == '2D' ? '2D ${s.language}' : '$formatName - 2D ${s.language}';
+            grouped.putIfAbsent(groupName, () => []).add(s);
+          }
+          
+          return grouped.entries.map((entry) {
+            final groupName = entry.key;
+            final groupShowtimes = entry.value;
+            final formatColor = roomFormatColor(groupShowtimes.first.roomFormat);
+            
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 20, bottom: 12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.movie_filter_rounded, color: formatColor, size: 16),
+                      const SizedBox(width: 6),
+                      Text(groupName, style: TextStyle(color: formatColor, fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5)),
+                    ],
+                  ),
                 ),
-                alignment: Alignment.center,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(time, style: TextStyle(color: isSelected ? Colors.black : Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                    const SizedBox(height: 3),
-                    Text(format,
-                        style: TextStyle(color: isSelected ? Colors.black54 : formatColor, fontWeight: FontWeight.bold, fontSize: 8)),
-                  ],
+                GridView.builder(
+                  shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, mainAxisSpacing: 10, crossAxisSpacing: 10, childAspectRatio: 2.0),
+                  itemCount: groupShowtimes.length,
+                  itemBuilder: (context, index) {
+                    final s = groupShowtimes[index];
+                    final time = Showtime.hhmm(s.showAt!);
+                    
+                    // Dự báo giờ ra về (thời lượng + 10p quảng cáo)
+                    final endTime = s.showAt!.add(Duration(minutes: durationMins + 10));
+                    final endTimeStr = Showtime.hhmm(endTime);
+                    
+                    // Đóng quầy sau khi chiếu được 15 phút
+                    final isPast = s.showAt!.isBefore(now.subtract(const Duration(minutes: 15)));
+                    
+                    final isSelected = _selectedShowtime?.id == s.id;
+                    return GestureDetector(
+                      onTap: isPast ? null : () => setState(() {
+                        _selectedTime = time;
+                        _selectedShowtime = s;
+                      }),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: isPast ? Colors.white.withValues(alpha: 0.05) : (isSelected ? Colors.amber : const Color(0xFF0A0A0A)),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: isSelected && !isPast ? Colors.white : Colors.white.withValues(alpha: 0.05)),
+                        ),
+                        alignment: Alignment.center,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(time, style: TextStyle(
+                              color: isPast ? Colors.white24 : (isSelected ? Colors.black : Colors.white), 
+                              fontWeight: FontWeight.bold, fontSize: 13,
+                              decoration: isPast ? TextDecoration.lineThrough : null,
+                            )),
+                            const SizedBox(height: 2),
+                            Text('~ $endTimeStr', style: TextStyle(
+                              color: isPast ? Colors.white12 : (isSelected ? Colors.black54 : Colors.white54), 
+                              fontSize: 9
+                            )),
+                            if (s.sessionType != 'Standard' && !isPast) ...[
+                              const SizedBox(height: 2),
+                              Text(s.sessionType, style: TextStyle(color: isSelected ? Colors.black54 : Colors.white38, fontSize: 8, fontStyle: FontStyle.italic)),
+                            ]
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 ),
-              ),
+              ],
             );
-          },
-        ),
+          }).toList();
+        }()),
     ];
   }
 }

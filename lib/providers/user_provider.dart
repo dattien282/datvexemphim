@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'auth_provider.dart';
 
 // ── Role enum ──────────────────────────────────────────────────────────────────
-enum UserRole { user, staff, theaterManager, admin }
+enum UserRole { user, staff, theaterManager, admin, accountant, marketing }
 
 extension UserRoleExt on UserRole {
   String get label {
@@ -12,6 +12,8 @@ extension UserRoleExt on UserRole {
       case UserRole.staff: return 'Nhân viên';
       case UserRole.theaterManager: return 'Quản lý rạp';
       case UserRole.admin: return 'Admin';
+      case UserRole.accountant: return 'Kế toán';
+      case UserRole.marketing: return 'Marketing';
     }
   }
 
@@ -21,6 +23,8 @@ extension UserRoleExt on UserRole {
       case UserRole.staff: return 'staff';
       case UserRole.theaterManager: return 'theater_manager';
       case UserRole.admin: return 'admin';
+      case UserRole.accountant: return 'accountant';
+      case UserRole.marketing: return 'marketing';
     }
   }
 
@@ -30,6 +34,8 @@ extension UserRoleExt on UserRole {
       case 'staff': return UserRole.staff;
       case 'theater_manager': return UserRole.theaterManager;
       case 'admin': return UserRole.admin;
+      case 'accountant': return UserRole.accountant;
+      case 'marketing': return UserRole.marketing;
       default: return UserRole.user;
     }
   }
@@ -43,6 +49,7 @@ class UserProfile {
   final String phone;
   final String? avatarUrl;
   final int walletBalance;
+  final int loyaltyPoints;
   final bool isAdmin;           // backward compat
   final UserRole role;
   final String? assignedTheater; // dành cho staff & theater_manager
@@ -54,6 +61,7 @@ class UserProfile {
     required this.phone,
     this.avatarUrl,
     required this.walletBalance,
+    this.loyaltyPoints = 0,
     required this.isAdmin,
     required this.role,
     this.assignedTheater,
@@ -73,6 +81,7 @@ class UserProfile {
       phone: data['phone'] ?? '',
       avatarUrl: data['avatarUrl'],
       walletBalance: (data['wallet_balance'] as num? ?? 500000).toInt(),
+      loyaltyPoints: (data['loyalty_points'] as num? ?? 0).toInt(),
       isAdmin: legacyAdmin || role == UserRole.admin,
       role: role,
       assignedTheater: data['assignedTheater'],
@@ -84,6 +93,7 @@ class UserProfile {
     String? phone,
     String? avatarUrl,
     int? walletBalance,
+    int? loyaltyPoints,
     UserRole? role,
     String? assignedTheater,
   }) {
@@ -94,6 +104,7 @@ class UserProfile {
       phone: phone ?? this.phone,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       walletBalance: walletBalance ?? this.walletBalance,
+      loyaltyPoints: loyaltyPoints ?? this.loyaltyPoints,
       isAdmin: isAdmin,
       role: role ?? this.role,
       assignedTheater: assignedTheater ?? this.assignedTheater,
@@ -115,6 +126,7 @@ final userProfileProvider = StreamProvider<UserProfile?>((ref) {
       FirebaseFirestore.instance.collection('users').doc(user.uid).set({
         'email': user.email,
         'wallet_balance': 500000,
+        'loyalty_points': 0,
         'role': 'user',
         'created_at': Timestamp.now(),
       });
@@ -124,6 +136,7 @@ final userProfileProvider = StreamProvider<UserProfile?>((ref) {
         displayName: '',
         phone: '',
         walletBalance: 500000,
+        loyaltyPoints: 0,
         isAdmin: false,
         role: UserRole.user,
       );

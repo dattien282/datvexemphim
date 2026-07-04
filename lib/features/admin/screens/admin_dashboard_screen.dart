@@ -12,6 +12,7 @@ import 'admin_broadcast_screen.dart';
 import 'admin_audit_log_screen.dart';
 import 'admin_age_verification_screen.dart';
 import 'admin_server_config_screen.dart';
+import '../../../providers/user_provider.dart';
 
 class AdminDashboardScreen extends ConsumerWidget {
   const AdminDashboardScreen({super.key});
@@ -25,8 +26,10 @@ class AdminDashboardScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final userProfile = ref.watch(userProfileProvider).value;
+    
     return Scaffold(
-      backgroundColor: const Color(0xFF000000),
+      backgroundColor: const Color(0xFF111115),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -64,7 +67,7 @@ class AdminDashboardScreen extends ConsumerWidget {
             // ── Quick actions ──────────────────────────────────────────────
             _SectionTitle(title: 'QUẢN LÝ'),
             const SizedBox(height: 12),
-            _buildActionGrid(context),
+            _buildActionGrid(context, userProfile),
             const SizedBox(height: 24),
 
             // ── Recent tickets ─────────────────────────────────────────────
@@ -77,27 +80,42 @@ class AdminDashboardScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildActionGrid(BuildContext context) {
-    final actions = [
-      _AdminAction(Icons.movie_creation_rounded, 'Quản lý\nPhim', Colors.blue,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminMoviesScreen()))),
-      _AdminAction(Icons.people_alt_rounded, 'Quản lý\nNgười dùng', Colors.purple,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminUsersScreen()))),
-      _AdminAction(Icons.local_offer_rounded, 'Voucher\n& Khuyến mãi', Colors.orange,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminVouchersScreen()))),
-      _AdminAction(Icons.bar_chart_rounded, 'Báo cáo\nDoanh thu', Colors.green,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRevenueScreen()))),
-      _AdminAction(Icons.rate_review_rounded, 'Kiểm duyệt\nĐánh giá', Colors.pinkAccent,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewsScreen()))),
-      _AdminAction(Icons.campaign_rounded, 'Gửi thông báo\nchung', Colors.amber,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBroadcastScreen()))),
-      _AdminAction(Icons.history_rounded, 'Nhật ký\nHành động', Colors.cyanAccent,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAuditLogScreen()))),
-      _AdminAction(Icons.badge_rounded, 'Duyệt xác minh\nđộ tuổi', Colors.redAccent,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAgeVerificationScreen()))),
-      _AdminAction(Icons.settings_suggest_rounded, 'Cấu hình\nServer', Colors.blueGrey,
-          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminServerConfigScreen()))),
-    ];
+  Widget _buildActionGrid(BuildContext context, UserProfile? userProfile) {
+    final role = userProfile?.role ?? UserRole.admin;
+
+    final actions = <_AdminAction>[];
+
+    // Quyền Admin: thấy tất cả
+    // Quyền Kế toán: thấy Doanh thu
+    // Quyền Marketing: thấy Khuyến mãi, Thông báo
+    if (role == UserRole.admin) {
+      actions.add(_AdminAction(Icons.movie_creation_rounded, 'Quản lý\nPhim', Colors.blue,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminMoviesScreen()))));
+      actions.add(_AdminAction(Icons.people_alt_rounded, 'Quản lý\nNgười dùng', Colors.purple,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminUsersScreen()))));
+      actions.add(_AdminAction(Icons.local_offer_rounded, 'Voucher\n& Khuyến mãi', Colors.orange,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminVouchersScreen()))));
+      actions.add(_AdminAction(Icons.bar_chart_rounded, 'Báo cáo\nDoanh thu', Colors.green,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRevenueScreen()))));
+      actions.add(_AdminAction(Icons.rate_review_rounded, 'Kiểm duyệt\nĐánh giá', Colors.pinkAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminReviewsScreen()))));
+      actions.add(_AdminAction(Icons.campaign_rounded, 'Gửi thông báo\nchung', Colors.amber,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBroadcastScreen()))));
+      actions.add(_AdminAction(Icons.history_rounded, 'Nhật ký\nHành động', Colors.cyanAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAuditLogScreen()))));
+      actions.add(_AdminAction(Icons.badge_rounded, 'Duyệt xác minh\nđộ tuổi', Colors.redAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAgeVerificationScreen()))));
+      actions.add(_AdminAction(Icons.settings_suggest_rounded, 'Cấu hình\nServer', Colors.blueGrey,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminServerConfigScreen()))));
+    } else if (role == UserRole.accountant) {
+      actions.add(_AdminAction(Icons.bar_chart_rounded, 'Báo cáo\nDoanh thu', Colors.green,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRevenueScreen()))));
+    } else if (role == UserRole.marketing) {
+      actions.add(_AdminAction(Icons.local_offer_rounded, 'Voucher\n& Khuyến mãi', Colors.orange,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminVouchersScreen()))));
+      actions.add(_AdminAction(Icons.campaign_rounded, 'Gửi thông báo\nchung', Colors.amber,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminBroadcastScreen()))));
+    }
 
     return GridView.count(
       crossAxisCount: 2,
@@ -234,18 +252,48 @@ class _StatsRow extends StatelessWidget {
             return StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('movies').snapshots(),
               builder: (context, movieSnap) {
-                final totalTickets = ticketSnap.data?.docs.length ?? 0;
-                final totalUsers = userSnap.data?.docs.length ?? 0;
-                final totalMovies = movieSnap.data?.docs.length ?? 0;
+                return StreamBuilder<QuerySnapshot>(
+                  stream: FirebaseFirestore.instance.collection('showtimes').snapshots(),
+                  builder: (context, showtimeSnap) {
+                    final totalOrders = ticketSnap.data?.docs.length ?? 0;
+                    final totalUsers = userSnap.data?.docs.length ?? 0;
+                    final totalMovies = movieSnap.data?.docs.length ?? 0;
+                    
+                    // Tính tổng ghế đã bán
+                    int totalSeatsSold = 0;
+                    if (ticketSnap.data != null) {
+                      for (final doc in ticketSnap.data!.docs) {
+                        final data = doc.data() as Map<String, dynamic>;
+                        final seats = data['seats'] as List<dynamic>? ?? [];
+                        totalSeatsSold += seats.length;
+                      }
+                    }
 
-                return Row(
-                  children: [
-                    _statCard('Tổng vé', '$totalTickets', Icons.confirmation_number_rounded, Colors.amber),
-                    const SizedBox(width: 10),
-                    _statCard('Người dùng', '$totalUsers', Icons.people_rounded, Colors.blue),
-                    const SizedBox(width: 10),
-                    _statCard('Phim', '$totalMovies', Icons.movie_rounded, Colors.purple),
-                  ],
+                    // Ước tính công suất (104 ghế / 1 suất chiếu xấp xỉ)
+                    final totalShowtimes = showtimeSnap.data?.docs.length ?? 0;
+                    final totalCapacity = totalShowtimes * 104;
+                    final double occupancyRate = totalCapacity > 0 ? (totalSeatsSold / totalCapacity * 100) : 0.0;
+
+                    return Column(
+                      children: [
+                        Row(
+                          children: [
+                            _statCard('Lấp đầy', '${occupancyRate.toStringAsFixed(1)}%', Icons.pie_chart_rounded, Colors.greenAccent),
+                            const SizedBox(width: 10),
+                            _statCard('Tổng đơn', '$totalOrders', Icons.confirmation_number_rounded, Colors.amber),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _statCard('Người dùng', '$totalUsers', Icons.people_rounded, Colors.blue),
+                            const SizedBox(width: 10),
+                            _statCard('Phim', '$totalMovies', Icons.movie_rounded, Colors.purple),
+                          ],
+                        ),
+                      ],
+                    );
+                  }
                 );
               },
             );

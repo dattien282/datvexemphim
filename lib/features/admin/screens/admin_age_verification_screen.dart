@@ -146,6 +146,19 @@ class AdminAgeVerificationScreen extends StatelessWidget {
         'ageVerifiedAt': Timestamp.now(),
       });
     }
+
+    // Gửi thông báo cho user
+    await FirebaseFirestore.instance.collection('notifications').add({
+      'userId': userId,
+      'title': approve ? 'Xác minh độ tuổi thành công' : 'Xác minh độ tuổi bị từ chối',
+      'body': approve 
+          ? 'Yêu cầu xác minh CCCD của bạn đã được Admin phê duyệt. Bây giờ bạn có thể đặt vé phim T18+.' 
+          : 'Yêu cầu xác minh của bạn đã bị từ chối do ảnh không hợp lệ hoặc mờ. Vui lòng chụp lại ảnh CCCD rõ nét hơn.',
+      'type': 'age_verification_result',
+      'isRead': false,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+
     await logAdminAction(
       action: approve ? 'approve_age_verification' : 'reject_age_verification',
       targetCollection: 'age_verification_requests',

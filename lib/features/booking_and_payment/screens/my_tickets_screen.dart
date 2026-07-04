@@ -160,6 +160,167 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
     Add2Calendar.addEvent2Cal(event);
   }
 
+  void _showReviewDialog(BuildContext context, String ticketId, String movieTitle) {
+    int rating = 5;
+    final commentCtrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF16161F),
+            title: Text('Đánh giá: $movieTitle', style: const TextStyle(color: Colors.amber, fontSize: 16)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(5, (index) {
+                    return IconButton(
+                      icon: Icon(index < rating ? Icons.star_rounded : Icons.star_outline_rounded, color: Colors.amber, size: 32),
+                      onPressed: () => setState(() => rating = index + 1),
+                    );
+                  }),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: commentCtrl,
+                  maxLines: 3,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Chia sẻ cảm nhận của bạn...',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: const Color(0xFF1E1E2A),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy', style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+                onPressed: () async {
+                  await FirebaseFirestore.instance.collection('reviews').add({
+                    'ticketId': ticketId,
+                    'movieTitle': movieTitle,
+                    'rating': rating,
+                    'comment': commentCtrl.text.trim(),
+                    'createdAt': FieldValue.serverTimestamp(),
+                  });
+                  if (ctx.mounted) {
+                    Navigator.pop(ctx);
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cảm ơn bạn đã đánh giá!')));
+                  }
+                },
+                child: const Text('Gửi', style: TextStyle(color: Colors.black)),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
+  void _showGiftDialog(BuildContext context, String ticketId, String qrSignature) {
+    final emailCtrl = TextEditingController();
+    bool isProcessing = false;
+    String? errorMsg;
+
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setState) {
+          return AlertDialog(
+            backgroundColor: const Color(0xFF16161F),
+            title: const Text('Tặng vé (Chuyển nhượng)', style: TextStyle(color: Colors.pinkAccent, fontSize: 16)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Nhập Email tài khoản của người nhận. Vé sẽ được chuyển thẳng sang tài khoản của họ.', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: emailCtrl,
+                  style: const TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    hintText: 'Nhập Email bạn bè...',
+                    hintStyle: const TextStyle(color: Colors.white38),
+                    filled: true,
+                    fillColor: Colors.white10,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  ),
+                ),
+                if (errorMsg != null) ...[
+                  const SizedBox(height: 8),
+                  Text(errorMsg!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                ]
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Hủy', style: TextStyle(color: Colors.white54))),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.pinkAccent),
+                onPressed: isProcessing ? null : () async {
+                  final email = emailCtrl.text.trim();
+                  if (email.isEmpty) {
+                    setState(() => errorMsg = 'Vui lòng nhập Email');
+                    return;
+                  }
+                  
+                  if (email == FirebaseAuth.instance.currentUser?.email) {
+                    setState(() => errorMsg = 'Bạn không thể tự tặng vé cho chính mình');
+                    return;
+                  }
+
+                  setState(() {
+                    isProcessing = true;
+                    errorMsg = null;
+                  });
+
+                  try {
+                    // Tìm user theo email
+                    final usersSnap = await FirebaseFirestore.instance.collection('users').where('email', isEqualTo: email).get();
+                    if (usersSnap.docs.isEmpty) {
+                      setState(() {
+                        errorMsg = 'Không tìm thấy người dùng có Email này trong hệ thống.';
+                        isProcessing = false;
+                      });
+                      return;
+                    }
+
+                    final receiverId = usersSnap.docs.first.id;
+
+                    // Đổi chủ sở hữu vé
+                    await FirebaseFirestore.instance.collection('tickets').doc(ticketId).update({
+                      'userId': receiverId,
+                    });
+
+                    if (context.mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Tặng vé thành công! Vé đã được chuyển.'), backgroundColor: Colors.teal),
+                      );
+                    }
+                  } catch (e) {
+                    setState(() {
+                      errorMsg = 'Lỗi hệ thống: $e';
+                      isProcessing = false;
+                    });
+                  }
+                },
+                child: isProcessing 
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Text('Xác nhận Tặng', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+
   void _showTicketDetailsModal(BuildContext context, String ticketId, Map<String, dynamic> ticketData) {
     final title = ticketData['movieTitle'] ?? 'Phim Stella Cinema';
     final posterUrl = ticketData['posterUrl'] ?? '';
@@ -169,6 +330,8 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
     final String showDate = ticketData['showDate'] ?? 'Unknown Date';
     final String showTime = ticketData['showTime'] ?? 'Unknown Time';
     final String theaterName = ticketData['theaterName'] ?? ticketData['selectedTheater'] ?? 'Stella Cinema';
+    final String? roomName = ticketData['roomName'] as String?;
+    final String? duration = ticketData['duration'] as String?;
     final isCancelled = ticketData['paymentStatus'] == 'CANCELLED';
     final String? qrSignature = ticketData['qrSignature'] as String?;
 
@@ -231,7 +394,7 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
                                     children: [
                                       const Icon(Icons.access_time_rounded, size: 16, color: Colors.black54),
                                       const SizedBox(width: 6),
-                                      const Text('120 phút', style: TextStyle(color: Colors.black87, fontSize: 13)), // Mock duration
+                                      Text(duration?.isNotEmpty == true ? duration! : 'Đang cập nhật', style: const TextStyle(color: Colors.black87, fontSize: 13)),
                                     ],
                                   ),
                                   const SizedBox(height: 6),
@@ -275,7 +438,7 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
                                 Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Text('Phòng chiếu', style: TextStyle(color: Colors.black54, fontSize: 12)),
+                                    const Text('Ghế', style: TextStyle(color: Colors.black54, fontSize: 12)),
                                     Text(seats.join(', '), style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14)),
                                   ],
                                 ),
@@ -319,7 +482,10 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(theaterName, style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
+                                      Text(
+                                        roomName?.isNotEmpty == true ? '$theaterName - $roomName' : theaterName,
+                                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15),
+                                      ),
                                       const SizedBox(height: 4),
                                       const Text('Please arrive 15 minutes early.', style: TextStyle(color: Colors.black54, fontSize: 13)),
                                     ],
@@ -382,20 +548,50 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
               ),
               
               const SizedBox(height: 16),
-              if (!isCancelled)
+              if (!isCancelled) ...[
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: OutlinedButton.icon(
-                    onPressed: () => _addToDeviceCalendar(context, title, showDate, showTime, theaterName),
-                    icon: const Icon(Icons.calendar_month_rounded, color: Colors.amber, size: 18),
-                    label: const Text('Lưu vào lịch', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 13)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.amber),
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-                    ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => _addToDeviceCalendar(context, title, showDate, showTime, theaterName),
+                        icon: const Icon(Icons.calendar_month_rounded, color: Colors.amber, size: 16),
+                        label: const Text('Lưu lịch', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.amber),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                        ),
+                      ),
+                      if (qrSignature != null) ...[
+                        const SizedBox(width: 8),
+                        OutlinedButton.icon(
+                          onPressed: () => _showGiftDialog(context, ticketId, qrSignature),
+                          icon: const Icon(Icons.card_giftcard_rounded, color: Colors.pinkAccent, size: 16),
+                          label: const Text('Tặng vé', style: TextStyle(color: Colors.pinkAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: Colors.pinkAccent),
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: () => _showReviewDialog(context, ticketId, title),
+                        icon: const Icon(Icons.star_rounded, color: Colors.lightGreenAccent, size: 16),
+                        label: const Text('Đánh giá', style: TextStyle(color: Colors.lightGreenAccent, fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.lightGreenAccent),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
+              ],
               // Close button
               ElevatedButton(
                 onPressed: () => Navigator.pop(context),

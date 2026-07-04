@@ -182,16 +182,33 @@ class _ReportBody extends StatelessWidget {
         final Map<String, int> byMovie = {};
         // Count by theater (chỉ có ý nghĩa khi không lọc theo 1 rạp cụ thể)
         final Map<String, int> byTheater = {};
+        // Count by Combo
+        final Map<String, int> byCombo = {};
+        
         for (final d in docs) {
           final data = d.data() as Map<String, dynamic>;
           final title = data['movieTitle'] ?? '—';
           byMovie[title] = (byMovie[title] ?? 0) + ((data['totalAmount'] as num?)?.toInt() ?? 0);
           final theaterName = data['theaterName'] ?? '—';
           byTheater[theaterName] = (byTheater[theaterName] ?? 0) + ((data['totalAmount'] as num?)?.toInt() ?? 0);
+
+          // Parse combos
+          final combosList = data['combos'] as List<dynamic>?;
+          if (combosList != null) {
+            for (final c in combosList) {
+              if (c is Map<String, dynamic>) {
+                final cTitle = c['title'] ?? 'Unknown';
+                final qty = (c['quantity'] as num?)?.toInt() ?? 0;
+                byCombo[cTitle] = (byCombo[cTitle] ?? 0) + qty;
+              }
+            }
+          }
         }
         final topMovies = byMovie.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
         final topTheaters = byTheater.entries.toList()
+          ..sort((a, b) => b.value.compareTo(a.value));
+        final topCombos = byCombo.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
         return SingleChildScrollView(
@@ -339,6 +356,43 @@ class _ReportBody extends StatelessWidget {
                 }),
                 const SizedBox(height: 20),
               ],
+
+              // Top Combos
+              _sectionTitle('TOP BẮP NƯỚC BÁN CHẠY'),
+              const SizedBox(height: 10),
+              if (topCombos.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 20),
+                  child: Text('Chưa có dữ liệu bắp nước', style: TextStyle(color: Colors.white54, fontSize: 13)),
+                ),
+              ...topCombos.take(5).map((entry) {
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF16161F),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: Colors.pinkAccent.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.fastfood_rounded, color: Colors.pinkAccent, size: 20),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(entry.key, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold)),
+                      ),
+                      Text('${entry.value} phần', style: const TextStyle(color: Colors.pinkAccent, fontSize: 14, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                );
+              }),
+              const SizedBox(height: 20),
 
               // Recent transactions
               _sectionTitle('GIAO DỊCH GẦN ĐÂY'),
@@ -553,7 +607,9 @@ class _ReportBody extends StatelessWidget {
       final tempDir = await getTemporaryDirectory();
       final file = File('${tempDir.path}/bao_cao_doanh_thu.xlsx');
       await file.writeAsBytes(bytes);
-      await Share.shareXFiles([XFile(file.path)], text: 'Báo cáo doanh thu Stella Cinema');
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], text: 'Báo cáo doanh thu Stella Cinema'),
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

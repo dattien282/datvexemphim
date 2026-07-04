@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
@@ -17,6 +18,7 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
   Position? _userPosition;
   bool _isLoadingLocation = true;
   String _selectedCity = 'Tất cả';
+  StreamSubscription<Position>? _positionStreamSubscription;
 
   // Danh sách rạp lấy trực tiếp từ Firestore (theatersProvider) - đồng bộ với
   // toàn bộ app thay vì hardcode riêng như trước. Dùng Map để giữ nguyên logic
@@ -28,6 +30,13 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
   void initState() {
     super.initState();
     _determineUserPosition();
+  }
+
+  @override
+  void dispose() {
+    _positionStreamSubscription?.cancel();
+    _mapController?.dispose();
+    super.dispose();
   }
 
   void _syncTheatersFromProvider(List<Theater> theaters) {
@@ -66,14 +75,27 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
       return;
     }
 
-    Position position = await Geolocator.getCurrentPosition(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    );
-    _userPosition = position;
-    _calculateDistancesAndSort();
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      _userPosition = position;
+      _calculateDistancesAndSort();
+    } catch (_) {}
+
+    _positionStreamSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen((Position position) {
+      if (!mounted) return;
+      _userPosition = position;
+      _calculateDistancesAndSort(animate: false);
+    });
   }
 
-  void _calculateDistancesAndSort() {
+  void _calculateDistancesAndSort({bool animate = false}) {
     if (_userPosition == null) return;
 
     for (var theater in _allTheaters) {
@@ -88,10 +110,10 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
       theater['timeMins'] = (km * 2.5).ceil();
     }
 
-    _filterAndSortTheaters();
+    _filterAndSortTheaters(animate: animate);
   }
 
-  void _filterAndSortTheaters() {
+  void _filterAndSortTheaters({bool animate = false}) {
     List<Map<String, dynamic>> filtered = _allTheaters.where((theater) {
       if (_selectedCity == 'Tất cả') return true;
       return theater['city'] == _selectedCity;
@@ -106,7 +128,7 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
       _isLoadingLocation = false;
     });
 
-    if (_processedTheaters.isNotEmpty && _mapController != null) {
+    if (animate && _processedTheaters.isNotEmpty && _mapController != null) {
       _mapController!.animateCamera(
         CameraUpdate.newLatLngZoom(
           LatLng(_processedTheaters[0]['lat'], _processedTheaters[0]['lng']),
@@ -198,7 +220,7 @@ class _TheaterMapsScreenState extends ConsumerState<TheaterMapsScreen> {
                   onTap: () {
                     setState(() {
                       _selectedCity = city;
-                      _filterAndSortTheaters();
+                      _filterAndSortTheaters(animate: true);
                     });
                   },
                   child: Container(

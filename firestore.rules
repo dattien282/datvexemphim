@@ -31,6 +31,24 @@ service cloud.firestore {
       return getUserRole() == 'staff';
     }
 
+    function isAccountant() {
+      return getUserRole() == 'accountant';
+    }
+
+    function isMarketing() {
+      return getUserRole() == 'marketing';
+    }
+
+    // Xác minh review gắn với đúng 1 vé COMPLETED của chính người gửi review,
+    // đúng phim - dùng cho collection 'movie_reviews' bên dưới, chặn spam
+    // review ảo từ tài khoản chưa từng mua vé xem phim đó.
+    function isValidReviewTicket(ticketId, movieTitle) {
+      return exists(/databases/$(database)/documents/tickets/$(ticketId))
+        && get(/databases/$(database)/documents/tickets/$(ticketId)).data.userId == request.auth.uid
+        && get(/databases/$(database)/documents/tickets/$(ticketId)).data.paymentStatus == 'COMPLETED'
+        && get(/databases/$(database)/documents/tickets/$(ticketId)).data.movieTitle == movieTitle;
+    }
+
     // =========================================================================
     // QUY TẮC CHO TỪNG COLLECTION
     // =========================================================================
@@ -73,14 +91,37 @@ service cloud.firestore {
       allow write: if isAdmin() || isTheaterManager();
     }
 
-    // 3. COLLECTION 'vouchers' & 'promotions'
-    match /vouchers/{document=**} {
+    // Comment ở trên nhắc tới 'theaters' nhưng chưa từng có match block riêng
+    // - rơi vào deny-all mặc định, khiến mọi màn đọc danh sách rạp (kể cả
+    // theaters_provider.dart dùng ở khắp app) bị chặn khi rules được deploy
+    // đúng theo file này.
+    match /theaters/{document=**} {
       allow read: if true;
       allow write: if isAdmin() || isTheaterManager();
     }
-    match /promotions/{document=**} {
+
+    // 2b. COLLECTION 'rooms' (Phòng chiếu + sơ đồ ghế của từng rạp)
+    match /rooms/{document=**} {
       allow read: if true;
       allow write: if isAdmin() || isTheaterManager();
+    }
+
+    // COLLECTION 'combos' (Combo bắp nước - combo_selection_screen.dart)
+    match /combos/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager();
+    }
+
+    // 3. COLLECTION 'vouchers' & 'promotions'
+    // Vai trò 'marketing' (admin_dashboard_screen.dart điều hướng tới màn
+    // Voucher/Broadcast) cũng được quản lý voucher/khuyến mãi.
+    match /vouchers/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager() || isMarketing();
+    }
+    match /promotions/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager() || isMarketing();
     }
 
     // 4. COLLECTION 'temporary_locks' (Khoá ghế)
@@ -88,18 +129,36 @@ service cloud.firestore {
       // Đọc: Ai cũng được đọc để biết ghế nào bị khoá
       allow read: if true;
       
-      // Tạo: User tự tạo khoá ghế cho mình
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      
+      // Tạo: User tự tạo khoá ghế cho mình. Client ghi field 'lockedBy' (email),
+      // không phải 'userId' - xem seat_booking_screen.dart _onSeatTap.
+      allow create: if isAuthenticated() && request.resource.data.lockedBy == request.auth.token.email;
+
       // Sửa/Xoá: Chỉ người tạo ra khoá ghế đó mới được xoá (huỷ thanh toán)
       // hoặc Admin/Backend sẽ tự dọn dẹp các khoá hết hạn
-      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow update, delete: if isAuthenticated() && (resource.data.lockedBy == request.auth.token.email || isAdmin());
+    }
+
+    // 4b. COLLECTION 'showtime_seat_status' (Trạng thái ghế theo suất chiếu,
+    // dùng để check-and-set atomic trong 1 transaction khi ghi vé - chặn race
+    // condition đặt trùng ghế mà temporary_locks (khoá "mềm") không tự chặn
+    // được. Rules không thể xác minh "ghi đúng từ trong transaction" - phần
+    // đảm bảo atomic thực sự nằm ở logic transaction phía client
+    // (payment_service.dart, staff_walkin_sale_screen.dart).
+    match /showtime_seat_status/{document=**} {
+      allow read: if true;
+      // Không thể xác minh "ghi đúng từ trong transaction" ở rules, nhưng ít
+      // nhất giới hạn field được ghi chỉ có 'bookedSeatIds' (kiểu list) - chặn
+      // việc chèn field lạ/tuỳ ý vào document này.
+      allow write: if isAuthenticated()
+                   && request.resource.data.keys().hasOnly(['bookedSeatIds'])
+                   && request.resource.data.bookedSeatIds is list;
     }
 
     // 5. COLLECTION 'tickets' (Vé xem phim)
     match /tickets/{ticketId} {
-      // Đọc: User xem vé của mình. Staff/Manager/Admin xem tất cả.
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff() || isTheaterManager() || isAdmin());
+      // Đọc: User xem vé của mình. Staff/Manager/Admin xem tất cả. Accountant
+      // (admin_revenue_screen.dart) cũng cần đọc toàn bộ vé để tính doanh thu.
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff() || isTheaterManager() || isAdmin() || isAccountant());
       
       // Tạo: User tự tạo vé (PENDING hoặc COMPLETED)
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
@@ -126,7 +185,71 @@ service cloud.firestore {
       
       allow delete: if isAdmin();
     }
-    
+
+    // 7. Các collection sau đây được app dùng thật (đã grep toàn bộ lib/) nhưng
+    // chưa từng có match block riêng - đều đang bị chặn hoàn toàn bởi deny-all
+    // mặc định bên dưới cho tới khi thêm rule ở đây, y hệt lỗi đã gặp với
+    // 'rooms' (Phase 1) và 'theaters' (ở trên).
+
+    // 'configs' (server_config: Gemini key...) - chỉ admin đọc/sửa qua
+    // admin_server_config_screen.dart; server.js đọc bằng Admin SDK (bỏ qua rules).
+    match /configs/{document=**} {
+      allow read, write: if isAdmin();
+    }
+
+    // 'age_verification_requests' (Xác minh tuổi 18+)
+    match /age_verification_requests/{requestId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin(); // Duyệt/từ chối - xem admin_age_verification_screen.dart
+    }
+
+    // 'incidents' (Báo cáo sự cố tại rạp) - staff tạo, theater_manager xem theo rạp.
+    match /incidents/{document=**} {
+      allow read: if isStaff() || isTheaterManager() || isAdmin();
+      allow create: if isStaff() || isTheaterManager() || isAdmin();
+      allow update, delete: if isTheaterManager() || isAdmin();
+    }
+
+    // 'movie_reviews' (Đánh giá phim công khai, có like) - đọc công khai;
+    // update cho phép mọi user đăng nhập vì cần sửa field 'likes' của review
+    // người khác khi bấm thích (movie_detail_screen.dart).
+    match /movie_reviews/{document=**} {
+      allow read: if true;
+      // Tạo: bắt buộc kèm ticketId trỏ tới đúng 1 vé COMPLETED của chính
+      // người gửi cho đúng phim đang review - trước đây bất kỳ ai đăng nhập
+      // cũng review được phim bất kỳ chưa từng mua vé.
+      allow create: if isAuthenticated()
+                    && 'ticketId' in request.resource.data
+                    && isValidReviewTicket(request.resource.data.ticketId, request.resource.data.movieTitle);
+      allow update: if isAuthenticated();
+      allow delete: if isAdmin();
+    }
+
+    // 'reviews' (Phản hồi ngắn sau khi xem phim, chỉ ghi - my_tickets_screen.dart,
+    // không có UI đọc lại trong app).
+    match /reviews/{document=**} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+    }
+
+    // 'shifts' (Phân ca nhân viên) - theater_manager quản lý, staff CHỈ xem ca
+    // của chính mình (staffIds chứa uid, xem smart_roster_screen.dart /
+    // staff_dashboard_screen.dart _StaffShiftsTab) - trước đây cho phép mọi
+    // staff đọc toàn bộ collection dù comment ghi "xem ca của mình", khiến
+    // nhân viên rạp A đọc được lịch ca của rạp B, C...
+    match /shifts/{shiftId} {
+      allow read: if isTheaterManager() || isAdmin() ||
+                  (isStaff() && request.auth.uid in resource.data.staffIds);
+      allow write: if isTheaterManager() || isAdmin();
+    }
+
+    // 'admin_audit_log' (Nhật ký hành động admin)
+    match /admin_audit_log/{document=**} {
+      allow read: if isAdmin();
+      allow create: if isAdmin();
+    }
+
     // Từ chối tất cả các hành động khác không được khai báo rõ
     match /{document=**} {
       allow read, write: if false;

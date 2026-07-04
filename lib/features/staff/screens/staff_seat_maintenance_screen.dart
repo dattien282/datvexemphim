@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../../models/room_layout.dart';
+import '../../theater_manager/widgets/seat_grid_widget.dart';
 
 /// Đánh dấu ghế hỏng/bảo trì tạm thời cho phòng chiếu tại rạp mình phụ
 /// trách - trước đây không có cách nào staff báo ghế hỏng, khách vẫn có thể
@@ -79,14 +81,7 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
       stream: _selectedRoom!.reference.snapshots(),
       builder: (context, snap) {
         final data = (snap.data?.data() as Map<String, dynamic>?) ?? (_selectedRoom!.data() as Map<String, dynamic>);
-        final standardRows = (data['standardRows'] as num? ?? 3).toInt();
-        final vipRows = (data['vipRows'] as num? ?? 5).toInt();
-        final sweetboxRows = (data['sweetboxRows'] as num? ?? 2).toInt();
-        final seatsPerRow = (data['seatsPerRow'] as num? ?? 10).toInt();
-        final brokenSeats = ((data['brokenSeats'] as List?) ?? []).map((e) => e.toString()).toSet();
-
-        final rowLabels = List.generate(standardRows + vipRows + sweetboxRows, (i) => String.fromCharCode('A'.codeUnitAt(0) + i));
-        final sweetboxLabels = rowLabels.sublist(standardRows + vipRows);
+        final layout = RoomLayout.fromMap(_selectedRoom!.id, data);
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16),
@@ -96,49 +91,16 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
                 padding: EdgeInsets.only(bottom: 12),
                 child: Text('Chạm vào ghế để đánh dấu hỏng/gỡ đánh dấu', style: TextStyle(color: Colors.white38, fontSize: 11)),
               ),
-              for (final row in rowLabels.sublist(0, standardRows + vipRows))
-                _buildRow(row, seatsPerRow, brokenSeats, isSweetbox: false),
-              if (sweetboxRows > 0) ...[
-                const SizedBox(height: 10),
-                const Text('GHẾ ĐÔI', style: TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
-                for (final row in sweetboxLabels) _buildRow(row, seatsPerRow, brokenSeats, isSweetbox: true),
-              ],
+              SeatGridView(
+                layout: layout,
+                mode: SeatGridMode.maintenance,
+                brokenSeats: layout.brokenSeats,
+                onToggleBroken: (seatId) => _toggleBroken(seatId, layout.brokenSeats.contains(seatId)),
+              ),
             ],
           ),
         );
       },
-    );
-  }
-
-  Widget _buildRow(String row, int seatsPerRow, Set<String> brokenSeats, {required bool isSweetbox}) {
-    final count = isSweetbox ? (seatsPerRow / 2).floor() : seatsPerRow;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        SizedBox(width: 20, child: Text(row, textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 11, fontWeight: FontWeight.bold))),
-        ...List.generate(count, (i) {
-          final seatId = isSweetbox ? '$row${i * 2 + 1}-$row${i * 2 + 2}' : '$row${i + 1}';
-          final isBroken = brokenSeats.contains(seatId);
-          return GestureDetector(
-            onTap: () => _toggleBroken(seatId, isBroken),
-            child: Container(
-              margin: const EdgeInsets.all(2),
-              width: isSweetbox ? 50 : 26,
-              height: 26,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: isBroken ? Colors.redAccent.withValues(alpha: 0.4) : const Color(0xFF222232),
-                borderRadius: BorderRadius.circular(5),
-                border: isBroken ? Border.all(color: Colors.redAccent) : null,
-              ),
-              child: isBroken
-                  ? const Icon(Icons.build_rounded, color: Colors.redAccent, size: 12)
-                  : Text(isSweetbox ? '${i * 2 + 1}•${i * 2 + 2}' : '${i + 1}',
-                      style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
-            ),
-          );
-        }),
-      ],
     );
   }
 

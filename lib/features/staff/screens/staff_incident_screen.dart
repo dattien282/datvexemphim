@@ -48,7 +48,7 @@ class _StaffIncidentScreenState extends State<StaffIncidentScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF111115),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         title: const Text('Báo cáo sự cố', style: TextStyle(color: Colors.orangeAccent, fontSize: 16, fontWeight: FontWeight.bold)),

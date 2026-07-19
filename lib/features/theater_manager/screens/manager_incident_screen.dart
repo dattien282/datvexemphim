@@ -9,7 +9,7 @@ class ManagerIncidentScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF111115),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         title: const Text('Báo cáo sự cố', style: TextStyle(color: Colors.redAccent, fontSize: 16, fontWeight: FontWeight.bold)),
@@ -24,6 +24,11 @@ class ManagerIncidentScreen extends StatelessWidget {
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: Colors.redAccent));
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Text('Lỗi tải danh sách sự cố: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+            );
           }
           final docs = snapshot.data?.docs ?? [];
           if (docs.isEmpty) {

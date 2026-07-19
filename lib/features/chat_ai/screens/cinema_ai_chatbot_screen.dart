@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import '../../booking_and_payment/screens/movie_detail_screen.dart';
 import '../../../core/constants.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class CinemaAiChatbotScreen extends StatefulWidget {
   const CinemaAiChatbotScreen({super.key});
@@ -64,9 +65,18 @@ class _CinemaAiChatbotScreenState extends State<CinemaAiChatbotScreen> {
           return {'role': msg['sender'] == 'user' ? 'user' : 'model', 'text': msg['text'] ?? ''};
         }).toList();
 
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          throw 'User not authenticated';
+        }
+        final token = await user.getIdToken();
+
         final response = await http.post(
           Uri.parse('${AppConfig.paymentBackendUrl}/gemini-chat'),
-          headers: {'Content-Type': 'application/json'},
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
           body: jsonEncode({'message': userText, 'movieContext': movieContext, 'history': history}),
         ).timeout(const Duration(seconds: 20));
 

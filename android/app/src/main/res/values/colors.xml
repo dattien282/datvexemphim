@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Màu chủ đạo app (amber), dùng làm màu icon cho push notification -
+         khớp màu FCM payload đặt ở backend-payos/server.js sendFcmToAllTokens. -->
+    <color name="notification_color">#FFC107</color>
+</resources>

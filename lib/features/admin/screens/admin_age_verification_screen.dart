@@ -103,7 +103,7 @@ class AdminAgeVerificationScreen extends StatelessWidget {
           child: url == null
               ? Container(height: 100, color: const Color(0xFF1E1E2A))
               : Image.network(url, height: 100, width: double.infinity, fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(height: 100, color: const Color(0xFF1E1E2A), child: const Icon(Icons.broken_image_rounded, color: Colors.white24))),
+                  errorBuilder: (_, _, _) => Container(height: 100, color: const Color(0xFF1E1E2A), child: const Icon(Icons.broken_image_rounded, color: Colors.white24))),
         ),
       ],
     );

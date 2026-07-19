@@ -12,6 +12,25 @@ class Showtime {
   final String movieTitle;
   final String roomName;
   final String roomFormat;
+  // Định dạng trình chiếu/âm thanh THẬT SỰ CHỌN cho suất này, khi phòng hỗ
+  // trợ nhiều hơn 1 tổ hợp (VD phòng IMAX chiếu được cả IMAX 2D lẫn IMAX 3D)
+  // - xem models/room_layout.dart RoomCapability. null cho suất chiếu cũ
+  // (trước khi field này tồn tại) hoặc khi phòng chỉ có đúng 1 tổ hợp - hiển
+  // thị vẫn fallback về roomFormat như cũ trong trường hợp đó.
+  final String? projectionFormat;
+  final String? soundFormat;
+  // Chốt cứng lúc tạo suất chiếu = rooms/{id}.currentSeatMapVersionId tại
+  // thời điểm đó (xem models/room_layout.dart SeatMapVersion) - đảm bảo suất
+  // chiếu này luôn tra đúng sơ đồ ghế đã dùng khi bán vé, không bị ảnh hưởng
+  // nếu phòng được sửa sơ đồ (thêm/bớt ghế) sau này. null cho suất chiếu tạo
+  // trước khi tính năng version ra đời - seat_booking_screen.dart tự fallback
+  // về tra theo tên phòng như cũ trong trường hợp đó.
+  final String? seatMapVersionId;
+  // Dynamic pricing (F.5): phụ thu % theo tỷ lệ lấp đầy (0/5/10), do cron
+  // updateDynamicPricing ở backend-payos/server.js ghi lên - chỉ tăng không
+  // giảm, suất mới luôn 0. App cộng vào giá hiển thị ở màn chọn ghế, server
+  // cộng vào giá trừ tiền (computeAuthoritativeAmount) - 2 bên luôn khớp.
+  final int dynamicSurchargePercent;
   // Ngôn ngữ suất chiếu ('Phụ đề'/'Lồng tiếng') - thuộc tính của SUẤT CHIẾU,
   // không phải của phòng/định dạng phòng (RoomFormatSpec), vì cùng 1 phòng có
   // thể chiếu cả 2 bản vào giờ khác nhau.
@@ -26,6 +45,21 @@ class Showtime {
   final int priceStandard;
   final int priceVip;
   final String status;
+  // Mốc vận hành phòng chiếu (Giai đoạn G) - tách "giờ chiếu hiển thị cho
+  // khách" (showAt, KHÔNG đổi ý nghĩa) khỏi "phòng thực sự bị chiếm bao lâu".
+  // Trước đây toàn bộ hệ thống ngầm định 1 buffer cứng 10 phút sau khi phim
+  // kết thúc (quảng cáo/dọn phòng gộp chung, không tách được), không có buffer
+  // TRƯỚC giờ chiếu (quảng cáo/trailer trước phim) - 3 field dưới đây thay thế
+  // con số cứng đó bằng cấu hình có thể chỉnh theo từng suất, mặc định giữ
+  // NGUYÊN hành vi cũ (advertisingMinutes=0, exitBufferMinutes=10,
+  // cleaningMinutes=0) để không đổi kết quả tính toán của suất chiếu cũ chưa
+  // có các field này. Không lưu movieDurationMinutes trên Showtime (thuộc về
+  // Movie, không phải Showtime - tránh trùng lặp/lệch dữ liệu), nên
+  // contentEndAt/roomReleaseAt là HÀM nhận movieDurationMinutes làm tham số
+  // thay vì getter đơn thuần.
+  final int advertisingMinutes;
+  final int exitBufferMinutes;
+  final int cleaningMinutes;
 
   const Showtime({
     required this.id,
@@ -33,12 +67,19 @@ class Showtime {
     required this.movieTitle,
     required this.roomName,
     required this.roomFormat,
+    this.projectionFormat,
+    this.soundFormat,
+    this.seatMapVersionId,
+    this.dynamicSurchargePercent = 0,
     required this.language,
     required this.sessionType,
     required this.showAt,
     required this.priceStandard,
     required this.priceVip,
     required this.status,
+    this.advertisingMinutes = 0,
+    this.exitBufferMinutes = 10,
+    this.cleaningMinutes = 0,
   });
 
   factory Showtime.fromMap(String id, Map<String, dynamic> data) {
@@ -49,14 +90,40 @@ class Showtime {
       movieTitle: data['movieTitle'] as String? ?? '',
       roomName: data['roomName'] as String? ?? '',
       roomFormat: data['roomFormat'] as String? ?? 'Standard',
+      projectionFormat: data['projectionFormat'] as String?,
+      soundFormat: data['soundFormat'] as String?,
+      seatMapVersionId: data['seatMapVersionId'] as String?,
+      dynamicSurchargePercent: (data['dynamicSurchargePercent'] as num? ?? 0).toInt(),
       language: data['language'] as String? ?? 'Phụ đề',
       sessionType: data['sessionType'] as String? ?? 'Standard',
       showAt: showAtTimestamp?.toDate() ?? parseLegacyDateTime(data['date'] as String?, data['time'] as String?),
       priceStandard: (data['priceStandard'] as num? ?? 90000).toInt(),
       priceVip: (data['priceVip'] as num? ?? 120000).toInt(),
       status: data['status'] as String? ?? 'active',
+      advertisingMinutes: (data['advertisingMinutes'] as num? ?? 0).toInt(),
+      exitBufferMinutes: (data['exitBufferMinutes'] as num? ?? 10).toInt(),
+      cleaningMinutes: (data['cleaningMinutes'] as num? ?? 0).toInt(),
     );
   }
+
+  /// Giờ chiếu hiển thị cho khách (đúng tên/ý nghĩa như bên ngoài quảng cáo)
+  /// - alias ngữ nghĩa của [showAt], KHÔNG thay thế field cũ (mọi chỗ đọc
+  /// 'showAt' vẫn hoạt động y hệt, tránh phải migrate hàng loạt).
+  DateTime? get advertisedStartAt => showAt;
+
+  /// Phim thật sự bắt đầu chiếu (sau đoạn quảng cáo/trailer, nếu có cấu hình).
+  DateTime? get contentStartAt => advertisedStartAt?.add(Duration(minutes: advertisingMinutes));
+
+  /// Phim kết thúc - cần biết thời lượng phim (thuộc Movie, không lưu trên
+  /// Showtime) nên nhận làm tham số thay vì đọc field nội bộ.
+  DateTime? contentEndAt(int movieDurationMinutes) =>
+      contentStartAt?.add(Duration(minutes: movieDurationMinutes));
+
+  /// Thời điểm phòng thật sự trống, sẵn sàng cho suất kế tiếp (đã cộng thời
+  /// gian khách ra về + dọn phòng) - đây mới là mốc đúng để kiểm tra chồng
+  /// giờ 2 suất cùng phòng, không phải chỉ mỗi giờ bắt đầu.
+  DateTime? roomReleaseAt(int movieDurationMinutes) =>
+      contentEndAt(movieDurationMinutes)?.add(Duration(minutes: exitBufferMinutes + cleaningMinutes));
 
   /// Parse fallback cho tài liệu cũ chưa có 'showAt'. Thử ISO 'yyyy-MM-dd'
   /// trước, rồi tới nhãn tiếng Việt 'Thứ x, dd/MM' (không có năm - suy ra năm

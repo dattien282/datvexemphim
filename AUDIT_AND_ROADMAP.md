@@ -1,10 +1,12 @@
 # Stella Cinema (datvexemphim) — Audit toàn diện & Kế hoạch xây dựng theo Role
 
-> Ngày lập báo cáo: 2026-07-01 · Cập nhật trạng thái: 2026-07-01 (sau khi triển khai Phase 0–4)
+> Ngày lập báo cáo: 2026-07-01 · Cập nhật trạng thái: 2026-07-14 (sau khi rà soát commit `7943f38` — đợt 2 "Sửa lỗi thanh toán/điểm loyalty/combo, siết chặt Firestore rules")
 > Phạm vi: toàn bộ `lib/` (~10.500 dòng), `backend-payos/` (Node.js/PayOS), cấu hình Firebase.
 > Phương pháp: đọc trực tiếp toàn bộ màn hình theo từng module (Auth/Role, Booking/Payment/Staff/Theater Manager, Notification/AI/Maps).
 >
 > **Chú thích trạng thái:** ✅ Đã làm xong · ⚠️ Đã làm một phần / cần thao tác thủ công · *(không đánh dấu = chưa làm)*
+>
+> **Mục 0–5 dưới đây giữ nguyên làm hồ sơ lịch sử của đợt audit đầu (tính đến 2026-07-01).** Toàn bộ phát hiện mới, xác nhận trạng thái hiện tại, và kế hoạch tiếp theo nằm ở **[Mục 6 — Rà soát đợt 2](#6-rà-soát-đợt-2--2026-07-14-sau-commit-7943f38)** ở cuối file — đọc mục đó trước nếu chỉ muốn biết "hiện tại còn thiếu gì".
 
 ---
 
@@ -149,3 +151,134 @@ Có thêm field cũ `isAdmin: boolean` song song với `role` (kỹ thuật nợ
 ---
 
 *Báo cáo tổng hợp từ 3 lượt rà soát song song trên toàn bộ mã nguồn Flutter và backend Node.js/PayOS.*
+
+---
+
+## 6. Rà soát đợt 2 — 2026-07-14 (sau commit `7943f38`)
+
+Từ 2026-07-01 đến nay có thêm 1 commit lớn (`7943f38`, 2026-07-04, +5654/-1409 dòng trên 57 file) giải quyết phần lớn các mục P0/P1 còn tồn đọng ở Mục 3–5. Phần dưới đây xác nhận lại **từng mục cụ thể** bằng cách đọc trực tiếp code hiện tại (không suy đoán từ commit message), nêu phát hiện mới, và đề xuất việc cần làm tiếp để dự án hoàn thiện hơn.
+
+### 6.1 Các mục P0 cũ nay đã xác nhận **hoàn thành thật sự**
+
+| # | Hạng mục (tham chiếu Mục 3/4 cũ) | Bằng chứng |
+|---|---|---|
+| 1 | Nạp ví không còn ghi thẳng Firestore từ client | `profile_screen.dart` chỉ gọi dialog nạp ví, không còn set `wallet_balance`; backend có `POST /topup-wallet` (`backend-payos/server.js:586-599`) dùng Admin SDK. |
+| 2 | Trừ ví khi thanh toán đã dùng transaction | `payment_service.dart:58-90` tạo vé PENDING + giữ ghế trong 1 transaction, sau đó gọi `POST /pay-wallet`; server trừ tiền/điểm/voucher trong `firestore.runTransaction` (`server.js:539-562`). |
+| 3 | **Giữ ghế có transaction nguyên tử thật sự** (trước đây mục 3.2.10 đánh giá "chưa xử lý") | `seat_reservation_service.dart` (`areSeatsAvailable`/`reserveSeats`) chạy trong cùng transaction Firestore với tạo vé — 2 khách chọn trùng ghế cùng lúc sẽ có 1 người bị transaction abort, không còn double-booking do race condition ở tầng ứng dụng. |
+| 4 | Huỷ vé/hoàn tiền có kiểm soát thời gian, qua transaction | `POST /cancel-ticket` (`server.js:959-1037`): transaction kiểm tra quyền sở hữu, trạng thái, chặn huỷ vé đã check-in, chặn huỷ vé COMPLETED trong vòng 30 phút trước giờ chiếu, hoàn tiền vào ví và nhả ghế `showtime_seat_status` — tất cả trong 1 transaction. |
+| 5 | Tăng `currentUses` voucher đúng transaction thanh toán | Helper `bumpVoucherUsage()` (`server.js:392-402`) gọi trong cùng transaction ở cả `/pay-wallet` (strict) lẫn webhook PayOS (không strict, vì webhook có thể retry) — không còn rủi ro vượt `maxUses`. |
+| 6 | Giá combo đọc đúng Firestore theo rạp | Xác nhận qua `combo_selection_screen.dart` + phần tính giá lại ở server — bảng giá cứng cũ trong `server.js` đã bị xoá. |
+| 7 | Điểm loyalty tính đúng ở cả 2 luồng thanh toán | Cả `/pay-wallet` và webhook PayOS đều tính lại điểm ở server, không tin số client gửi. |
+| 8 | **Xác thực email khi đăng ký — thực ra đã xong**, đánh giá "chưa làm" ở bản audit cũ là **lỗi thời** | `login_screen.dart:128-165` chặn user thường (không phải staff/manager/admin) chưa `emailVerified`, hiện dialog `_showVerifyEmailGate` (dòng 170-237) yêu cầu xác thực trước khi vào app. README (commit `7943f38`) liệt kê mục này vào "Còn tồn đọng" — **đây là điểm README bị lệch với code thật, nên sửa lại README**. |
+| 9 | Ảnh CCCD xác minh tuổi dùng signed upload | Cloudinary signed upload qua `/cloudinary-sign`, yêu cầu Firebase ID token hợp lệ — không còn unsigned preset công khai. |
+| 10 | Review phim yêu cầu vé COMPLETED đúng phim | Kiểm tra cả client lẫn `firestore.rules` (field `ticketId` bắt buộc trỏ đúng vé). |
+| 11 | Thêm vai trò `accountant`, `marketing` trong Firestore Rules + enum | `firestore.rules`, `UserRole` enum (`user_provider.dart:6`), UI riêng trong `admin_dashboard_screen.dart:110-116`, `admin_users_screen.dart:113-125`. |
+
+### 6.2 Phát hiện mới (chưa có trong bản audit đầu)
+
+1. **[BUG P1 mới] Tài khoản `accountant`/`marketing` không bao giờ vào được dashboard của mình.**
+   `admin_dashboard_screen.dart` đã có nhánh UI riêng cho `UserRole.accountant`/`UserRole.marketing` (dòng 110-116), nhưng điều hướng sau đăng nhập ở `login_screen.dart` (`_navigateByRole`, dòng 146-159) chỉ kiểm tra `profile.hasAdminAccess` / `hasManagerAccess` / `hasStaffAccess`. Ba getter này định nghĩa ở `user_provider.dart:70-72`:
+   ```dart
+   bool get hasAdminAccess => role == UserRole.admin || isAdmin;
+   bool get hasManagerAccess => role == UserRole.theaterManager || hasAdminAccess;
+   bool get hasStaffAccess => role == UserRole.staff || hasManagerAccess;
+   ```
+   → không bao gồm `accountant`/`marketing`, nên 2 role này rơi vào nhánh `else` và bị đẩy thẳng ra `HomeScreen` (giao diện khách hàng) thay vì `AdminDashboardScreen`. Kết quả: tạo tài khoản `accountant`/`marketing` từ màn Quản lý người dùng xong, đăng nhập vào **không thấy được** màn hình đã xây riêng cho họ — tính năng coi như vô dụng dù đã có đủ Firestore Rules + UI.
+   **Cách sửa gọn nhất:** thêm 1 getter `hasBackofficeAccess` (bao gồm cả `accountant`/`marketing`) và dùng nó ở bước điều hướng, trỏ tới `AdminDashboardScreen` (màn này tự lọc action theo `role` sẵn rồi).
+
+2. **File rác/trùng lặp trong `lib/features/notifications/`** — không còn liên quan tới "stub rỗng" như audit cũ nữa, mà là **file trùng tên chứa code chết**:
+   - `lib/features/notifications/screens.dart`, `services.dart`, `widgets.dart` (0 dòng, stub cũ) — vẫn còn, nên xoá.
+   - **Mới phát sinh**: `lib/features/notifications/screens/notification_service.dart` (44 dòng) **trùng chức năng** với `lib/features/notifications/services/notification_service.dart` (62 dòng, bản đang được import/sử dụng thật). File đặt sai thư mục (`screens/notification_service.dart`) nên dọn để tránh nhầm lẫn khi sửa sau này.
+
+3. **`lib/core/theme.dart`, `utils.dart`, `widgets.dart` vẫn 0 dòng** — chưa dọn như audit cũ đã ghi, vẫn nên xoá vì không có import nào trỏ tới.
+
+4. **`register_screen.dart` + `auth_service.dart` (đường đăng ký cũ) là code chết, không phải chỉ "chưa xác thực email".** Luồng đăng ký thật hiện nay nằm trong `login_screen.dart` (form đăng ký lồng trong màn đăng nhập, gọi `AuthViewModel.signUp` → `auth_repository.dart`). `register_screen.dart` dùng `AuthService.registerWithEmail` cũ, không route tới nó từ đâu cả trong `lib/` — nên xoá hẳn 2 file này (hoặc `auth_service.dart` nếu còn dùng nơi khác thì giữ, cần grep lại trước khi xoá) thay vì "dọn dẹp" nửa vời.
+
+5. **Truy vấn `notifications` vẫn không có `.limit()`** — xác nhận lại còn nguyên ở `notification_screen.dart` (dòng ~19-23 và ~48-51, cả stream chính lẫn hàm xoá tất cả). Với tài khoản dùng lâu, số document tăng vô hạn, mỗi lần mở màn Thông báo tải toàn bộ lịch sử.
+
+6. **Chatbot AI: đã vá được lỗ hổng lộ API key (tốt), nhưng vẫn còn 2 vấn đề hiệu năng cũ:**
+   - Vẫn gọi `FirebaseFirestore.instance.collection('movies').get()` **2 lần cho mỗi tin nhắn** (dòng 52 và 80 của `cinema_ai_chatbot_screen.dart`) — nên cache trong state của widget, chỉ refetch khi mở lại màn hình.
+   - Nhánh fallback không dùng Gemini vẫn hardcode giá vé/địa chỉ rạp trong chuỗi text.
+
+7. **README (`README.md:226`, phần "Còn tồn đọng") liệt kê nhầm "chưa xác thực email khi đăng ký"** — như nêu ở mục 6.1.8, việc này đã xong từ commit `ff7c76d` (2026-07-02), **trước cả commit viết ra dòng README này** (`7943f38`, 2026-07-04). Cần sửa lại README cho khớp thực tế.
+
+8. **`temporary_locks` (collection tên cũ trong audit đầu) không còn tồn tại như một cơ chế riêng** — đã được thay bằng `showtime_seat_status` + transaction (xem 6.1.3), nên phần "chưa xử lý" của mục 3.2.10 trong audit gốc **coi như đã giải quyết bằng cách khác tốt hơn**, không phải bằng cron dọn dẹp `temporary_locks` như dự kiến ban đầu. README hiện ghi đúng: "chỉ dọn khi client đang mở màn chọn ghế đúng suất đó" — nghĩa là nếu khách thoát app đột ngột giữa chừng chọn ghế (trước khi tạo vé PENDING), ghế có thể bị giữ tạm thời hơi lâu hơn dự kiến trong `showtime_seat_status`; **rủi ro thấp** vì `reserveSeats` chỉ chạy sau khi vé PENDING đã tạo trong cùng transaction, không phải ngay khi bấm chọn ghế — cần xác nhận thêm bằng cách đọc `seat_booking_screen.dart` nếu muốn chắc chắn 100%.
+
+### 6.3 Bảng cập nhật độ ưu tiên còn lại (thay thế Mục 5 cho phần chưa xong)
+
+| Ưu tiên | Hạng mục | Trạng thái |
+|---|---|---|
+| **P1 — Sửa ngay** | Bug điều hướng `accountant`/`marketing` không vào được dashboard (mục 6.2.1) | Chưa làm |
+| **P2** | Xoá code chết: `register_screen.dart`, `auth_service.dart` (nếu không còn dùng), `lib/core/{theme,utils,widgets}.dart`, `lib/features/notifications/{screens,services,widgets}.dart` (stub cũ), `notifications/screens/notification_service.dart` (trùng) | Chưa làm |
+| **P2** | `.limit()` cho truy vấn `notifications` + phân trang khi danh sách dài | Chưa làm |
+| **P2** | Sửa README mục "Còn tồn đọng" (bỏ dòng email verification đã xong) | Chưa làm |
+| **P3** | Cache dữ liệu phim trong chatbot thay vì query Firestore mỗi tin nhắn; bỏ hardcode giá/địa chỉ ở nhánh fallback | Chưa làm |
+| **P3** | Xoay vòng Firebase API Key / Google Maps API Key (đang hardcode, được Rules bảo vệ nên không khẩn cấp nhưng nên làm nếu repo public) | Cần thao tác thủ công |
+| **Đã xong ở đợt 2** | Transaction ví (nạp/trừ), transaction giữ ghế, huỷ vé/hoàn tiền qua transaction, tăng lượt voucher đúng transaction, giá combo theo Firestore, điểm loyalty 2 luồng, xác thực email, upload CCCD signed, review yêu cầu vé COMPLETED | ✅ |
+
+### 6.4 Đề xuất tiếp theo để dự án "hoàn thiện" hơn (ngoài phạm vi bug-fix)
+
+Đây là các hạng mục audit gốc chưa từng đề cập, mang tính hoàn thiện sản phẩm hơn là vá lỗi:
+
+1. **Kiểm thử tự động**: `test/` hiện gần như trống (chỉ có template mặc định của `flutter create`) — với độ phức tạp nghiệp vụ hiện tại (transaction ví, voucher, giữ ghế), nên có ít nhất unit test cho `pricing_service.dart`/`discount_service.dart` (thuần Dart, dễ test, chứa logic tính tiền quan trọng nhất của app) và integration test happy-path cho luồng đặt vé.
+2. **Xử lý lỗi mạng ở luồng thanh toán**: nếu app crash/mất mạng giữa lúc gọi `/pay-wallet` hoặc `/pay-payos` sau khi đã tạo vé PENDING, cần xác nhận có luồng dọn vé PENDING treo (đã có `/discard-pending-ticket` — kiểm tra nó được gọi tự động khi mở lại "Vé của tôi" hoặc chỉ khi người dùng chủ động thoát màn thanh toán).
+3. **Rate limiting cho backend** (`backend-payos/server.js`): các endpoint `/pay-wallet`, `/cancel-ticket`, `/verify-checkin` hiện chỉ có `requireAuth`, chưa có giới hạn số request/phút theo user — nên cân nhắc thêm (vd. `express-rate-limit`) để chặn spam/brute-force, đặc biệt cho `/verify-checkin` (thử sai chữ ký QR liên tục).
+4. **Logging có cấu trúc**: `server.js` dùng `console.log`/`console.error` rải rác — nếu deploy production thật (không chỉ chạy qua ngrok để demo), nên chuyển sang logger có level/format (pino/winston) để dễ debug khi có sự cố thanh toán thật.
+5. **CI tối thiểu**: chưa thấy GitHub Actions/workflow nào — nên thêm 1 workflow chạy `flutter analyze` + `flutter test` khi có PR, tránh lỗi biên dịch lọt vào `main`.
+6. **Đồng bộ Firestore Indexes**: `firestore.indexes.json` cần rà lại xem có khớp với các query mới thêm ở đợt 2 (vd. lọc `incidents` theo rạp, `shifts` theo user) — nếu thiếu index, các màn hình mới (`manager_incident_screen.dart`, `smart_roster_screen.dart`) sẽ lỗi khi data đủ lớn dù chạy mượt lúc dev với ít dữ liệu.
+
+---
+
+*Mục 6 được biên soạn từ việc đọc trực tiếp code hiện tại (không chỉ dựa vào commit message/README) — ngày 2026-07-14.*
+
+---
+
+## 7. Rà soát đợt 3 — 2026-07-19 (sau khi tách backend + tự thêm tính năng)
+
+Từ đợt 2 tới nay, dự án có 2 luồng thay đổi lớn cộng dồn, **tất cả đều chưa commit**:
+
+1. **Tách `backend-payos/server.js` (monolith ~2270 dòng) thành `backend-payos/src/{config,middleware,routes,services,jobs}/`** + entrypoint mới `backend-payos/index.js` — đã verify parity với `server.js` cũ (cùng response cho mọi endpoint test được), rồi chính chủ dự án tự xoá hẳn `server.js` sau khi hài lòng với bản tách.
+2. **Chủ dự án tự thêm tính năng/màn hình mới và sửa code song song**: `admin_pricing_rules_screen.dart`, `admin_room_formats_screen.dart`, `theater_attendance_screen.dart`, `manager_incident_screen.dart`, `staff_incident_screen.dart`, `smart_roster_screen.dart`, `seat_heatmap_screen.dart`, `seat_layout_helper.dart`, models `movie.dart`/`theater.dart`/`user_profile.dart` tách riêng từ các provider, và tự sửa `backend-payos/src/config/firebase.js` (chuyển PayOS sang `payment.service.js` riêng) + `backend-payos/src/routes/chat.routes.js` (thêm `requireAuth` cho `/gemini-chat`).
+
+Rà soát lần này dùng 4 lượt đọc code song song (data layer/models, backend + Firestore rules, admin/staff/manager, customer) rồi xác minh lại từng phát hiện bằng cách đọc trực tiếp file trước khi kết luận.
+
+### 7.1 Bug nghiêm trọng — đã tìm thấy và **sửa luôn** trong đợt rà soát này
+
+| # | Bug | Vị trí | Ảnh hưởng | Đã sửa |
+|---|---|---|---|---|
+| 1 | `config/firebase.js` không còn export `TICKET_SIGNING_SECRET`/`CLOUDINARY_*` sau khi chủ dự án tách `payos` sang file riêng | `backend-payos/src/config/firebase.js` | `signTicket()` (ký QR vé) crash `TypeError` ở **mọi** `/walkin-sale`, `/sign-ticket`, `/verify-checkin` — bán vé quầy/check-in gãy hoàn toàn. `/cloudinary-sign` luôn trả 503 — upload CCCD xác minh tuổi + avatar gãy hoàn toàn. | ✅ Thêm lại 4 hằng số vào export, `auth.routes.js` đổi sang dùng chung nguồn thay vì tự định nghĩa trùng lặp. |
+| 2 | Đổi voucher bằng điểm thành viên dùng sai tên field Firestore | `lib/features/auth/screens/membership_screen.dart:64,70` (đọc/ghi `'loyaltyPoints'` thay vì `'loyalty_points'` — mọi nơi khác trong app + backend đều dùng `loyalty_points`) | Transaction luôn đọc ra 0 điểm → luôn báo "Bạn không đủ điểm!" dù tài khoản có đủ điểm — tính năng đổi điểm lấy voucher coi như hỏng hoàn toàn từ khi thêm. | ✅ Sửa cả 2 chỗ về `'loyalty_points'`. |
+| 3 | Mất dữ liệu `wheelchairSeats` khi sửa thông tin phòng | `lib/features/theater_manager/screens/room_management_screen.dart` (`_save()`, đoạn snapshot `layoutFields` cho `seat_map_versions`) | Mỗi lần theater_manager bấm "Chỉnh sửa" phòng (kể cả chỉ đổi tên/định dạng), bản `seat_map_versions` mới được tạo **thiếu hẳn field `wheelchairSeats`** — ghế đã đánh dấu ưu tiên xe lăn "biến mất" khỏi mọi suất chiếu tạo sau đó (dù `rooms/{id}` gốc vẫn còn). | ✅ Thêm `'wheelchairSeats'` vào `layoutFields`, snapshot đúng như `brokenSeats`. |
+| 4 | API import phim từ TMDB không hoạt động | `lib/features/admin/screens/admin_movies_screen.dart` gọi `/api/movies/import-tmdb`, nhưng route này chỉ tồn tại trong `backend-payos/src/routes/admin.routes.js` — **file không hề được `require` trong `app.js`** | Admin bấm "Nhập từ TMDB" trong màn Quản lý phim → luôn lỗi (404/kết nối thất bại), không tự dò được — tính năng coi như biến mất sau khi tách backend dù code vẫn còn nguyên. | ✅ Tách riêng route này ra `backend-payos/src/routes/movies.routes.js` (chỉ phụ thuộc `requireAuth`, không dính các route trùng lặp khác trong `admin.routes.js`) và mount vào `app.js`. |
+| 5 | Thiếu 3 Firestore composite index cho tính năng mới | `firestore.indexes.json` | `theater_attendance_screen.dart` (query `attendance_logs` theo `theater`+`date`+order `checkInTime`), `manager_incident_screen.dart` (query `incidents` theo `theater`+order `createdAt`), và cron `updateDynamicPricing` (query `showtimes` theo `status`+range `showAt`) đều sẽ ném lỗi `FAILED_PRECONDITION` khi data đủ lớn — dev ít data nên chưa thấy lỗi. Đây chính là điều Mục 6.4.6 đã cảnh báo trước, giờ xác nhận đúng. | ✅ Thêm 3 index vào `firestore.indexes.json` — **cần tự chạy `firebase deploy --only firestore:indexes` để áp dụng thật** (mình không tự deploy lần này). |
+| 6 | 2 màn hình mới không xử lý lỗi Firestore stream, hiển thị nhầm "không có dữ liệu" khi thật ra là lỗi (vd. do thiếu index ở mục 5) | `manager_incident_screen.dart`, `smart_roster_screen.dart` | Quản lý rạp thấy "Không có sự cố nào" / roster trống dù dữ liệu thật đang lỗi truy vấn — dễ hiểu nhầm là "chưa có ai báo cáo sự cố" thay vì "màn hình đang lỗi". | ✅ Thêm nhánh `snapshot.hasError` hiển thị rõ thông báo lỗi. |
+
+### 7.2 Phát hiện khác — cần bạn quyết định, **chưa tự sửa**
+
+| # | Vấn đề | Vị trí | Đề xuất |
+|---|---|---|---|
+| 1 | ~~File backend trùng lặp, không được mount, tự chứa bug riêng~~ | ~~`admin.routes.js`, `tickets.routes.js` (số nhiều), `cron/dynamic-pricing.js`, `cron/stale-ticket-cleanup.js`~~ | ✅ **Đã xoá** (2026-07-19) — lúc xoá phát hiện thêm 1 file cùng loại mà báo cáo đợt 3 bỏ sót: `src/cron/promo-push.js` (trùng phần promo-push đã có trong `src/jobs/cron.js`), đã xoá luôn cùng đợt. Xoá cả thư mục `src/cron/` rỗng sau đó. Verify lại: server boot sạch, health check OK. |
+| 2 | ~~Vai trò `accountant`/`marketing` chưa có dashboard nào tồn tại~~ | ~~Grep không ra class `AccountantDashboard`/`MarketingDashboard`~~ | **Đính chính**: nhận định "chưa từng được xây" ở lần rà soát này là **sai** — `admin_dashboard_screen.dart:116-124` đã có sẵn nhánh lọc menu riêng cho `UserRole.accountant` (chỉ hiện "Báo cáo Doanh thu") và `UserRole.marketing` (chỉ hiện "Voucher & Khuyến mãi" + "Gửi thông báo chung"), tự dùng chung 1 class `AdminDashboardScreen` — không có class riêng nên grep tên class mới ra "không tìm thấy". Bug thật đúng như Mục 6.2.1 đã ghi từ đầu: chỉ là lỗi điều hướng ở `login_screen.dart` (`_navigateByRole` chỉ check `hasAdminAccess`/`hasManagerAccess`/`hasStaffAccess`, thiếu nhánh cho 2 role này) — fix nhỏ, không phải xây dashboard mới. ✅ **Đã fix** (2026-07-19): thêm getter `hasBackofficeAccess` vào `user_profile.dart`, dùng ở `_navigateByRole` + cổng OTP (`_isPrivilegedAccount`) + cổng xác thực email trong `login_screen.dart` — accountant/marketing giờ vào đúng `AdminDashboardScreen` và được miễn OTP/email-verification như các tài khoản do admin cấp khác. |
+| 3 | **Giá vé lệch giữa client và server cho suất chiếu có `sessionType` đặc biệt** | `lib/features/booking_and_payment/services/pricing_service.dart` (áp dụng phụ thu/giảm giá riêng cho Midnight/Sneak Show/First Day/Marathon/Fan Screening/Special Event) vs `backend-payos/src/services/pricing.service.js` hàm `timeSurcharge()` (chỉ biết giờ &lt;12/&ge;22, không biết gì về `sessionType`) | Khi collection `pricing_rules` còn trống (đang là mặc định hiện tại), server tính tiền thật (`computeAuthoritativeAmount`, luôn thắng client) có thể **khác** giá hiển thị lúc khách chọn ghế cho các suất chiếu đặc biệt này. ✅ **Đã fix** (2026-07-19): thêm bảng `SESSION_TYPE_ADJUSTMENTS` (mirror `kSessionTypeSpecs`) vào `pricing.service.js`, `timeSurcharge()` nhận thêm tham số `sessionType` — ưu tiên bảng, fallback công thức giờ cũ cho suất chưa có sessionType. Verify bằng script đối chiếu 18 case JS vs Dart: tất cả khớp. |
+| 4 | **Màn "Bảo trì ghế" cũ của theater_manager chưa hỗ trợ ghế ưu tiên xe lăn** | `room_management_screen.dart` (`_SeatMaintenanceDialog` nội bộ, mở từ menu "Bảo trì ghế" trong danh sách phòng) chỉ toggle được `brokenSeats`, không có `wheelchairSeats`/`MaintenanceTarget` như `staff_seat_maintenance_screen.dart` (bản mới hơn) | ✅ **Đã fix** (2026-07-19): `_SeatMaintenanceDialog` giờ có 2 ChoiceChip GHẾ HỎNG/GHẾ XE LĂN (mirror pattern `staff_seat_maintenance_screen.dart`), toggle + lưu cả `wheelchairSeats` vào cả room doc lẫn `seat_map_versions`. |
+| 5 | Vài nit nhỏ không ảnh hưởng chức năng | `pricing_service.dart` (Dart): field `isWeekend` trong `PricingEngine.resolve` suy từ `weekendSurcharge != 0` thay vì check thứ Bảy/Chủ Nhật thật — hiện chưa ai đọc field này nên chưa gây bug, nhưng là bẫy cho người dùng sau; `seat_layout_helper.dart` comment ghi công thức trọng số `0.4/0.3/0.2` nhưng code là `0.4/0.3/0.3`; comment cũ còn nhắc tên `kRoomFormatSpecs` dù đã đổi thành `kDefaultRoomFormatSpecs`. | ✅ **Đã sửa hết** (2026-07-19): `isWeekend` check thứ Bảy/CN thật; comment trọng số sửa thành `0.4/0.3/0.3` khớp code; 3 comment `kRoomFormatSpecs` đổi thành `kDefaultRoomFormatSpecs`. |
+
+### 7.3 Xác nhận sạch (không có vấn đề)
+
+- Toàn bộ 5 file model/provider mới (`movie.dart`, `theater.dart`, `user_profile.dart`, `room_formats_provider.dart`, 2 widget mới trong `lib/core/widgets/` + `lib/features/home/widgets/`) đều là tách refactor sạch, được import/dùng đúng chỗ, không trùng lặp định nghĩa.
+- Xoá 5 file rác cũ (`lib/core/theme.dart`/`utils.dart`/`widgets.dart`, `lib/data/models.dart`/`services.dart`) không để lại import gãy nào.
+- Rules Firestore khớp đủ với mọi collection backend đọc/ghi; không có `allow write: if true` nào lộ ra ngoài ý muốn; `otp_codes`/`checkin_audit_log` đúng như thiết kế (chỉ Admin SDK truy cập, không rule cho client — không phải thiếu sót).
+- `AndroidManifest.xml` chỉ thêm 2 `meta-data` cho icon/màu thông báo FCM — không có quyền mới hay nguy cơ bảo mật.
+- Dropdown thiếu `isExpanded` (bug tràn viền tìm thấy đầu đợt rà soát này) đã rà lại toàn bộ 13 file admin/staff/manager có dùng Dropdown — không sót chỗ nào.
+- `cinema_ai_chatbot_screen.dart` đã cập nhật đúng để gửi kèm token khi `/gemini-chat` được thêm `requireAuth` — khách vãng lai không bị lỗi, chỉ tự động rơi về chế độ trả lời offline (có thể cân nhắc thêm dòng thông báo "Đăng nhập để chat với AI" cho rõ ràng hơn, không bắt buộc).
+
+### 7.4 Việc cần bạn tự làm
+
+1. **Deploy lại Firestore rules/indexes**: `firebase deploy --only firestore:rules,firestore:indexes` (mình không tự deploy lần này vì đã hỏi ý kiến bạn ở lượt trước rồi mới làm — lần này để bạn chủ động).
+2. Quyết định có xoá 4 file backend thừa ở mục 7.2.1 không.
+3. Quyết định độ ưu tiên xây dashboard `accountant`/`marketing` (mục 7.2.2) — việc lớn, không phải bugfix.
+4. Xác nhận có cần fix ngay lệch giá `sessionType` (mục 7.2.3) hay để sau khi có dữ liệu `pricing_rules` thật (khi đó server tự ưu tiên đọc từ đó, ít bị lệch hơn).
+
+---
+
+*Mục 7 biên soạn bằng 4 lượt đọc code song song + xác minh lại thủ công từng phát hiện bằng cách đọc trực tiếp file hiện tại — ngày 2026-07-19. Các bug ở mục 7.1 đã được sửa trực tiếp trong lúc rà soát; mục 7.2 chỉ báo cáo, chưa động vào code.*

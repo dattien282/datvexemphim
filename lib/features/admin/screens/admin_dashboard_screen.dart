@@ -12,6 +12,8 @@ import 'admin_broadcast_screen.dart';
 import 'admin_audit_log_screen.dart';
 import 'admin_age_verification_screen.dart';
 import 'admin_server_config_screen.dart';
+import 'admin_pricing_rules_screen.dart';
+import 'admin_room_formats_screen.dart';
 import '../../../providers/user_provider.dart';
 
 class AdminDashboardScreen extends ConsumerWidget {
@@ -29,7 +31,7 @@ class AdminDashboardScreen extends ConsumerWidget {
     final userProfile = ref.watch(userProfileProvider).value;
     
     return Scaffold(
-      backgroundColor: const Color(0xFF111115),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
@@ -107,6 +109,10 @@ class AdminDashboardScreen extends ConsumerWidget {
           () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminAgeVerificationScreen()))));
       actions.add(_AdminAction(Icons.settings_suggest_rounded, 'Cấu hình\nServer', Colors.blueGrey,
           () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminServerConfigScreen()))));
+      actions.add(_AdminAction(Icons.price_change_rounded, 'Luật giá\nvé', Colors.greenAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminPricingRulesScreen()))));
+      actions.add(_AdminAction(Icons.theaters_rounded, 'Định dạng\nphòng chiếu', Colors.indigoAccent,
+          () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRoomFormatsScreen()))));
     } else if (role == UserRole.accountant) {
       actions.add(_AdminAction(Icons.bar_chart_rounded, 'Báo cáo\nDoanh thu', Colors.green,
           () => Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminRevenueScreen()))));

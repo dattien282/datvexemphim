@@ -8,20 +8,20 @@ class NotificationItem extends StatelessWidget {
   final VoidCallback onTap;
 
   const NotificationItem({
-    Key? key,
+    super.key,
     required this.title,
     required this.message,
     required this.time,
     required this.isRead,
     required this.onTap,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
       onTap: onTap,
       child: Container(
-        color: isRead ? Colors.transparent : Colors.blue.withOpacity(0.05),
+        color: isRead ? Colors.transparent : Colors.blue.withValues(alpha: 0.05),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,

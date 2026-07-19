@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -6,6 +7,7 @@ import '../../theater_manager/widgets/seat_grid_widget.dart';
 import '../../../models/room_layout.dart';
 import '../../../models/showtime.dart';
 import '../services/pricing_service.dart';
+import '../services/seat_layout_helper.dart';
 import 'combo_selection_screen.dart';
 
 class SeatBookingScreen extends StatefulWidget {
@@ -27,6 +29,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   String? get _roomFormat => _layout.roomFormat;
   bool get _isGoldClass => _layout.isGoldClass;
   bool get _isLamour => _layout.isLamour;
+  bool get _isMotionSeat => _layout.isMotionSeat;
 
   @override
   void initState() {
@@ -41,6 +44,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       );
     }
     _loadRoomLayout();
+    _loadPricingRules();
   }
 
   String _theaterSize = 'Medium';
@@ -65,9 +69,24 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         });
       }
 
+      // 2. Fetch room layout - ưu tiên đúng phiên bản sơ đồ ghế đã chốt lúc
+      // tạo suất chiếu (seatMapVersionId, xem models/room_layout.dart
+      // SeatMapVersion) để không bị lệch nếu phòng được sửa sơ đồ sau khi
+      // suất chiếu này đã bán vé. Suất chiếu cũ chưa có field này (tạo trước
+      // khi tính năng version ra đời) fallback về tra theo tên phòng như cũ.
+      final seatMapVersionId = widget.movieData['seatMapVersionId'] as String?;
+      if (seatMapVersionId != null) {
+        final versionDoc = await FirebaseFirestore.instance.collection('seat_map_versions').doc(seatMapVersionId).get();
+        if (versionDoc.exists && mounted) {
+          setState(() {
+            _layout = RoomLayout.fromMap(versionDoc.id, versionDoc.data()!);
+          });
+        }
+        return;
+      }
+
       if (roomName == null) return;
 
-      // 2. Fetch room layout
       final snap = await FirebaseFirestore.instance
           .collection('rooms')
           .where('theaterName', isEqualTo: theater)
@@ -97,10 +116,39 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
     );
   }
 
+  // Luật giá từ collection pricing_rules (PricingEngine - Giai đoạn D), tải 1
+  // lần khi mở màn hình. null = chưa tải xong hoặc collection trống/lỗi mạng
+  // - _surcharge tự fallback về công thức cứng cũ trong trường hợp đó.
+  List<PricingRule>? _pricingRules;
+
+  Future<void> _loadPricingRules() async {
+    final rules = await PricingEngine.load();
+    if (rules != null && mounted) setState(() => _pricingRules = rules);
+  }
+
   ShowtimeSurcharge? get _surcharge {
     final showAt = _showAtDateTime;
     if (showAt == null) return null;
-    return ShowtimeSurcharge.fromShowAt(showAt, sessionType: widget.movieData['sessionType'] as String?);
+    final sessionType = widget.movieData['sessionType'] as String?;
+    final rules = _pricingRules;
+    if (rules != null) {
+      // basePrice (chỉ dùng cho luật kiểu percent) tính THÔ trực tiếp từ giá
+      // suất chiếu/theater size - TUYỆT ĐỐI không đi qua _standardBasePrice:
+      // getter đó kiểm tra _wednesdayDiscountApplies, vốn gọi ngược lại
+      // _surcharge này -> đệ quy vô hạn (StackOverflow đã xảy ra thật khi mở
+      // màn chọn ghế sau khi luật giá được tải).
+      final rawBasePrice = _hasRealShowtime
+          ? ((widget.movieData['priceStandard'] as num?)?.toInt() ?? _standardPriceFromTheaterSize)
+          : _standardPriceFromTheaterSize;
+      return PricingEngine.resolve(
+        rules,
+        showAt: showAt,
+        sessionType: sessionType,
+        theaterName: widget.movieData['selectedTheater'] as String?,
+        basePrice: rawBasePrice,
+      );
+    }
+    return ShowtimeSurcharge.fromShowAt(showAt, sessionType: sessionType);
   }
 
   bool get _hasRealShowtime => widget.movieData['showtimeId'] != null;
@@ -162,27 +210,33 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
     if (_wednesdayDiscountApplies) return basePrice; // Ưu đãi Thứ 4: đồng giá, không cộng thêm phụ thu khác
 
     final surcharge = _surcharge;
-    final weekendSurcharge = (surcharge?.isWeekend ?? false) ? 15000 : 0;
+    // Mức phụ thu cuối tuần giờ đến từ pricing_rules (PricingEngine) thay vì
+    // hằng số 15000 cứng - fallback công thức cũ trả về đúng 15000 nên hành
+    // vi không đổi khi chưa seed luật giá.
+    final weekendSurcharge = surcharge?.weekendSurcharge ?? 0;
     final timeSurcharge = surcharge?.timeOfDaySurcharge ?? 0;
 
-    return basePrice + weekendSurcharge + timeSurcharge;
+    final subtotal = basePrice + weekendSurcharge + timeSurcharge;
+
+    // Dynamic pricing (F.5): phụ thu % suất bán chạy, cùng giá trị server
+    // dùng khi trừ tiền (dynamicSurchargePercent trên document suất chiếu).
+    final dynPercent = (widget.movieData['dynamicSurchargePercent'] as num?)?.toInt() ?? 0;
+    return dynPercent > 0 ? (subtotal * (100 + dynPercent)) ~/ 100 : subtotal;
   }
 
-  String _getLockDocId(String seatId) {
-    final movieTitle = widget.movieData['title'] ?? '';
-    final theater = widget.movieData['selectedTheater'] ?? '';
-    final date = widget.movieData['selectedDate'] ?? '';
-    final time = widget.movieData['selectedTime'] ?? '';
-    final rawId = '${movieTitle}_${theater}_${date}_${time}_$seatId';
-    return rawId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
-  }
-
+  // Chọn/bỏ ghế giờ CHỈ là state cục bộ trên máy này - việc giữ ghế thật
+  // (atomic, chặn người khác) xảy ra 1 lần duy nhất khi bấm thanh toán
+  // (payment_service.dart gọi holdSeats() qua backend /seats/hold - Giai đoạn
+  // C). Bỏ hẳn việc ghi 'temporary_locks' mỗi lần tap như trước: vừa không
+  // atomic (2 người vẫn giữ trùng được), vừa spam write Firestore theo từng
+  // cú chạm. Ghế người khác đang giữ/đã bán realtime đến từ stream
+  // showtimes/{id}/seats trong build().
   void _onSeatTap(String seatId, bool isDouble, List<String> bookedSeats, Map<String, String> currentLocks) {
-    if (bookedSeats.contains(seatId) || _layout.brokenSeats.contains(seatId)) return; // REAL-TIME LOCK: Đã bán/hỏng thì cấm chạm
+    if (bookedSeats.contains(seatId) || _layout.brokenSeats.contains(seatId)) return;
 
-    final userEmail = FirebaseAuth.instance.currentUser?.email ?? 'anonymous';
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anonymous';
     final lockedBy = currentLocks[seatId];
-    if (lockedBy != null && lockedBy != userEmail) {
+    if (lockedBy != null && lockedBy != uid) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('⚠️ Ghế này đang được giữ bởi người khác! Vui lòng chọn ghế khác.'),
@@ -194,51 +248,137 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
     }
 
     final price = _getSeatPrice(seatId);
-    final docId = _getLockDocId(seatId);
-
     setState(() {
       if (_selectedSeats.contains(seatId)) {
         _selectedSeats.remove(seatId);
         _totalPrice -= price;
-        // Xóa giữ ghế tạm thời trên Firestore
-        FirebaseFirestore.instance.collection('temporary_locks').doc(docId).delete();
       } else {
         _selectedSeats.add(seatId);
         _totalPrice += price;
-        // Lưu giữ ghế tạm thời lên Firestore trong 5 phút
-        FirebaseFirestore.instance.collection('temporary_locks').doc(docId).set({
-          'movieTitle': widget.movieData['title'] ?? '',
-          'theater': widget.movieData['selectedTheater'] ?? '',
-          'date': widget.movieData['selectedDate'] ?? '',
-          'time': widget.movieData['selectedTime'] ?? '',
-          'seatId': seatId,
-          'lockedBy': userEmail,
-          'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(minutes: 5))),
-        });
       }
     });
-  }
 
-  @override
-  void dispose() {
-    _clearUserLocks();
-    super.dispose();
-  }
-
-  void _clearUserLocks() async {
-    final userEmail = FirebaseAuth.instance.currentUser?.email;
-    if (userEmail == null) return;
-    for (final seatId in _selectedSeats) {
-      try {
-        final docId = _getLockDocId(seatId);
-        await FirebaseFirestore.instance
-            .collection('temporary_locks')
-            .doc(docId)
-            .delete();
-      } catch (e) {
-        print('Error clearing temporary lock: $e');
-      }
+    // Cảnh báo mềm "ghế lẻ" (F.1): lựa chọn hiện tại để lại 1 ghế trống kẹt
+    // giữa - không chặn (tuỳ chính sách rạp), chỉ nhắc để khách tự cân nhắc.
+    final orphans = findOrphanSeats(
+      _layout,
+      {...bookedSeats, ..._layout.brokenSeats, ...currentLocks.keys},
+      _selectedSeats.toSet(),
+    );
+    if (orphans.isNotEmpty && mounted) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('💡 Lựa chọn này để lại ghế ${orphans.join(", ")} trống một mình - cân nhắc dịch sang 1 ghế để hàng ghế đẹp hơn nhé!'),
+          backgroundColor: Colors.blueGrey,
+          duration: const Duration(seconds: 3),
+        ),
+      );
     }
+  }
+
+  // F.2: chọn nhanh cụm ghế đẹp nhất cho nhóm N người (chấm điểm
+  // center/distance/continuity - xem seat_layout_helper.dart).
+  void _applySuggestion(int groupSize, List<String> bookedSeats, Map<String, String> currentLocks) {
+    final occupied = {...bookedSeats, ..._layout.brokenSeats, ...currentLocks.keys};
+    final suggestion = suggestBestSeats(_layout, occupied, groupSize);
+    if (suggestion == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Không còn $groupSize ghế liền kề nào trống cho suất này.'),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
+      return;
+    }
+    setState(() {
+      _selectedSeats.clear();
+      _selectedSeats.addAll(suggestion.seatIds);
+      _totalPrice = suggestion.seatIds.fold(0, (sum, s) => sum + _getSeatPrice(s));
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('✨ Gợi ý cho nhóm $groupSize người: ${suggestion.seatIds.join(", ")}'),
+        backgroundColor: Colors.teal,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // F.4: mô phỏng góc nhìn từ hàng ghế - bản vẽ MINH HOẠ (schematic, không
+  // phải ảnh chụp thật từ rạp) giúp khách hình dung màn hình to/nhỏ thế nào
+  // từ vị trí hàng ghế trước khi chọn. Khoảng cách/góc nhìn ước lượng theo
+  // chuẩn thiết kế rạp thông dụng (hàng đầu cách màn hình ~6m, mỗi hàng cách
+  // nhau ~1m, màn hình cao ~8m).
+  void _showViewSimulation() {
+    final rows = _layout.standardVipRowLabels;
+    if (rows.isEmpty) return;
+    String selectedRow = _selectedSeats.isNotEmpty ? _selectedSeats.first[0] : rows[rows.length ~/ 2];
+    if (!rows.contains(selectedRow)) selectedRow = rows[rows.length ~/ 2];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF16161F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final rowIndex = rows.indexOf(selectedRow);
+          final distanceM = 6 + rowIndex; // hàng A ~6m, mỗi hàng lùi ~1m
+          final viewAngleDeg = (2 * (180 / 3.14159) * math.atan(4.0 / distanceM)).round(); // màn cao 8m
+          final position = rowIndex < rows.length / 3
+              ? 'gần màn hình - hình ảnh choáng ngợp, hợp phim hành động'
+              : rowIndex < rows.length * 2 / 3
+                  ? 'khoảng giữa - cân bằng đẹp giữa hình ảnh và âm thanh'
+                  : 'phía sau - bao quát toàn màn hình, đỡ mỏi cổ';
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('GÓC NHÌN TỪ HÀNG GHẾ (minh hoạ)',
+                    style: TextStyle(color: Colors.indigoAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 6,
+                  children: [
+                    for (final row in rows)
+                      GestureDetector(
+                        onTap: () => setSheetState(() => selectedRow = row),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: row == selectedRow ? Colors.indigoAccent : const Color(0xFF222232),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(row,
+                              style: TextStyle(
+                                  color: row == selectedRow ? Colors.white : Colors.white54,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Bản vẽ phối cảnh: màn hình thu nhỏ dần khi hàng ghế lùi xa.
+                SizedBox(
+                  height: 140,
+                  width: double.infinity,
+                  child: CustomPaint(painter: _ViewSimulationPainter(rowIndex: rowIndex, totalRows: rows.length)),
+                ),
+                const SizedBox(height: 12),
+                Text('Hàng $selectedRow • cách màn hình ~${distanceM}m • góc nhìn dọc ~$viewAngleDeg°',
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 4),
+                Text('Vị trí $position.',
+                    textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                const SizedBox(height: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   @override
@@ -269,37 +409,38 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
           }
         }
 
-        // Lọc real-time danh sách ghế đang bị giữ tạm thời
+        // Trạng thái ghế realtime từ subcollection showtimes/{id}/seats
+        // (ShowtimeSeat - Giai đoạn C): HOLDING của người khác hiện "đang
+        // giữ", BOOKED/BLOCKED/UNAVAILABLE gộp vào danh sách không chọn được.
+        // Suất chiếu cũ (không có showtimeId thật hoặc chưa sinh seats) thì
+        // stream rỗng - chỉ còn lớp check vé 'tickets' phía trên hoạt động,
+        // đúng hành vi cũ trước Giai đoạn C.
+        final String? showtimeId = widget.movieData['showtimeId'] as String?;
         return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('temporary_locks')
-              .where('movieTitle', isEqualTo: movieTitle)
-              .where('theater', isEqualTo: theater)
-              .where('date', isEqualTo: date)
-              .where('time', isEqualTo: time)
-              .snapshots(),
-          builder: (context, lockSnapshot) {
+          stream: showtimeId != null
+              ? FirebaseFirestore.instance
+                  .collection('showtimes').doc(showtimeId).collection('seats')
+                  .snapshots()
+              : const Stream<QuerySnapshot>.empty(),
+          builder: (context, seatSnapshot) {
             final now = DateTime.now();
-            final Map<String, String> currentLocks = {}; // seatId -> lockedBy
-            if (lockSnapshot.hasData) {
-              for (var doc in lockSnapshot.data!.docs) {
+            final Map<String, String> currentLocks = {}; // seatId -> heldBy (uid)
+            if (seatSnapshot.hasData) {
+              for (var doc in seatSnapshot.data!.docs) {
                 final data = doc.data() as Map<String, dynamic>;
-                final expiresAt = (data['expiresAt'] as Timestamp?)?.toDate();
-                if (expiresAt != null && expiresAt.isAfter(now)) {
-                  final seatId = data['seatId'] as String;
-                  final lockedBy = data['lockedBy'] as String;
-                  currentLocks[seatId] = lockedBy;
-                } else {
-                  // Dọn dẹp khóa ghế đã hết hạn (best-effort) - trước đây chỉ
-                  // bị ẩn ở client (lọc theo expiresAt), document vẫn tồn tại
-                  // mãi trong Firestore không ai xóa, khiến temporary_locks
-                  // phình to vô ích theo thời gian.
-                  doc.reference.delete().catchError((_) {});
+                final status = data['status'] as String?;
+                if (status == 'HOLDING') {
+                  final heldUntil = (data['heldUntil'] as Timestamp?)?.toDate();
+                  if (heldUntil != null && heldUntil.isAfter(now)) {
+                    currentLocks[doc.id] = data['heldBy'] as String? ?? '';
+                  }
+                } else if (status == 'BOOKED' || status == 'BLOCKED' || status == 'UNAVAILABLE') {
+                  if (!bookedSeats.contains(doc.id)) bookedSeats.add(doc.id);
                 }
               }
             }
 
-            final userEmail = FirebaseAuth.instance.currentUser?.email ?? 'anonymous';
+            final userEmail = FirebaseAuth.instance.currentUser?.uid ?? 'anonymous';
 
             return Scaffold(
               backgroundColor: const Color(0xFF000000),
@@ -321,9 +462,14 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
                     color: const Color(0xFF121212),
                     child: Text(
-                      widget.movieData['roomFormat'] != null
-                          ? '$theater  |  $date  |  Suất: $time  •  ${widget.movieData['roomFormat']}'
-                          : '$theater  |  $date  |  Suất: $time',
+                      (widget.movieData['roomFormat'] != null
+                              ? '$theater  |  $date  |  Suất: $time  •  ${widget.movieData['roomFormat']}'
+                              : '$theater  |  $date  |  Suất: $time') +
+                          // F.5: báo rõ phụ thu suất bán chạy TRƯỚC khi khách
+                          // chọn ghế - giá hiển thị từng ghế đã bao gồm sẵn.
+                          (((widget.movieData['dynamicSurchargePercent'] as num?)?.toInt() ?? 0) > 0
+                              ? '  •  🔥 Suất bán chạy +${widget.movieData['dynamicSurchargePercent']}%'
+                              : ''),
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.w500, fontSize: 11),
                     ),
@@ -338,21 +484,69 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                         alignment: WrapAlignment.center,
                         children: [
                           if (_isGoldClass)
-                            _buildNoteItem('Ghế Gold (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E))
+                            _buildNoteItem('Ghế Recliner (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E))
                           else if (_isLamour)
                             _buildNoteItem("Ghế đôi L'amour (${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))})", const Color(0xFF3A1A1A))
+                          else if (_isMotionSeat)
+                            _buildNoteItem('Ghế Motion 4DX (${_formatPrice(_standardBasePrice)})', const Color(0xFF15291A))
                           else ...[
                             if (_layout.standardRows > 0) _buildNoteItem('Thường (${_formatPrice(_standardBasePrice)})', const Color(0xFF222232)),
                             if (_layout.vipRows > 0) _buildNoteItem('VIP (${_formatPrice(_vipBasePrice)})', const Color(0xFF322A1E)),
                             if (_layout.sweetboxRows > 0) _buildNoteItem('Sweetbox (${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))})', const Color(0xFF3A2232)),
                           ],
+                          if (_layout.wheelchairSeats.isNotEmpty)
+                            _buildNoteItem('Ghế xe lăn', Colors.blueAccent.withValues(alpha: 0.25)),
                           _buildNoteItem('Đang chọn', Colors.amber),
                           _buildNoteItem('Đang giữ (5p)', Colors.grey.withValues(alpha: 0.3)),
                           _buildNoteItem('Đã bán', Colors.redAccent),
                         ],
                       ),
                     ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
+
+                  // F.2: gợi ý cụm ghế đẹp nhất theo cỡ nhóm + F.4: mô phỏng
+                  // góc nhìn từ hàng ghế. Chỉ hiện cho phòng có hàng ghế đơn
+                  // (phòng toàn ghế đôi chọn theo cặp, không cần gợi ý cụm).
+                  if (_layout.standardVipRowLabels.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Wrap(
+                        alignment: WrapAlignment.center,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          const Text('✨ Gợi ý ghế:', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          for (final n in [1, 2, 3, 4]) ...[
+                            GestureDetector(
+                              onTap: () => _applySuggestion(n, bookedSeats, currentLocks),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: Colors.teal.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: Colors.teal.withValues(alpha: 0.4)),
+                                ),
+                                child: Text('$n người', style: const TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          ],
+                          GestureDetector(
+                            onTap: _showViewSimulation,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.indigo.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.indigoAccent.withValues(alpha: 0.4)),
+                              ),
+                              child: const Text('👁 Góc nhìn', style: TextStyle(color: Colors.indigoAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 12),
 
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 40), height: 4, width: double.infinity,
@@ -379,6 +573,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                             bookedSeats: {...bookedSeats, ..._layout.brokenSeats},
                             lockedBySeatId: currentLocks,
                             currentUserKey: userEmail,
+                            wheelchairSeats: _layout.wheelchairSeats,
                             onSeatTap: (seatId) => _onSeatTap(seatId, false, bookedSeats, currentLocks),
                           ),
                         ),
@@ -393,13 +588,11 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                       padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
                       color: const Color(0xFF0A0A0A).withValues(alpha: 0.8),
                       child: Text(
-                        (_isGoldClass
-                                ? 'Phân tích giá vé: Ghế Gold: ${_formatPrice(_vipBasePrice)}. '
+                        '${_isGoldClass
+                                ? 'Phân tích giá vé: Ghế Recliner: ${_formatPrice(_vipBasePrice)}. '
                                 : _isLamour
                                     ? "Phân tích giá vé: Ghế đôi L'amour: ${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))}. "
-                                    : 'Phân tích giá vé: Ghế Thường: ${_formatPrice(_standardBasePrice)}, VIP: ${_formatPrice(_vipBasePrice)}, Sweetbox: ${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))}. ') +
-                        '${(_surcharge?.isWeekend ?? false) ? "Cuối tuần (+15k/ghế)" : "Ngày thường (+0k)"} '
-                        '| ${widget.movieData['sessionType'] ?? 'Standard'} (${(_surcharge?.timeOfDaySurcharge ?? 0) > 0 ? '+' : ''}${_formatPrice(_surcharge?.timeOfDaySurcharge ?? 0)}/ghế)',
+                                    : 'Phân tích giá vé: Ghế Thường: ${_formatPrice(_standardBasePrice)}, VIP: ${_formatPrice(_vipBasePrice)}, Sweetbox: ${_formatPrice(_wednesdayDiscountApplies ? 100000 : (_vipBasePrice * 2))}. '}${(_surcharge?.isWeekend ?? false) ? "Cuối tuần (+${_formatPrice(_surcharge?.weekendSurcharge ?? 0)}/ghế)" : "Ngày thường (+0k)"} | ${widget.movieData['sessionType'] ?? 'Standard'} (${(_surcharge?.timeOfDaySurcharge ?? 0) > 0 ? '+' : ''}${_formatPrice(_surcharge?.timeOfDaySurcharge ?? 0)}/ghế)',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Colors.white38, fontSize: 10, fontStyle: FontStyle.italic),
                       ),
@@ -545,4 +738,55 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       ],
     );
   }
+}
+
+// Bản vẽ phối cảnh minh hoạ cho _showViewSimulation (F.4): màn hình cong +
+// vài hàng ghế phía trước, kích thước màn hình thu nhỏ dần theo hàng ghế
+// càng lùi xa - KHÔNG phải ảnh thật từ rạp, chỉ giúp hình dung tương đối.
+class _ViewSimulationPainter extends CustomPainter {
+  final int rowIndex;
+  final int totalRows;
+  const _ViewSimulationPainter({required this.rowIndex, required this.totalRows});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Tỷ lệ màn hình theo khoảng cách: hàng đầu nhìn màn hình chiếm ~95%
+    // chiều rộng khung vẽ, hàng cuối ~45%.
+    final t = totalRows <= 1 ? 0.0 : rowIndex / (totalRows - 1);
+    final screenWidth = size.width * (0.95 - 0.5 * t);
+    final screenHeight = size.height * (0.55 - 0.25 * t);
+    final left = (size.width - screenWidth) / 2;
+    final top = size.height * 0.08 + size.height * 0.12 * t;
+
+    // Màn hình (cong nhẹ) + ánh sáng hắt.
+    final screenPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Colors.amber.withValues(alpha: 0.9), Colors.amber.withValues(alpha: 0.4)],
+      ).createShader(Rect.fromLTWH(left, top, screenWidth, screenHeight));
+    final screenPath = Path()
+      ..moveTo(left, top + screenHeight * 0.15)
+      ..quadraticBezierTo(left + screenWidth / 2, top - screenHeight * 0.1, left + screenWidth, top + screenHeight * 0.15)
+      ..lineTo(left + screenWidth, top + screenHeight)
+      ..quadraticBezierTo(left + screenWidth / 2, top + screenHeight * 0.85, left, top + screenHeight)
+      ..close();
+    canvas.drawPath(screenPath, screenPaint);
+
+    // Vài hàng ghế phía trước (bóng đen) để tạo chiều sâu - số hàng thấy
+    // được tăng dần khi ngồi càng xa.
+    final headPaint = Paint()..color = const Color(0xFF222232);
+    final headsRows = (1 + 2 * t).round();
+    for (var r = 0; r < headsRows; r++) {
+      final y = size.height * (0.78 + 0.09 * r);
+      final headCount = 6 + r * 2;
+      for (var h = 0; h < headCount; h++) {
+        final x = size.width * (h + 0.5) / headCount;
+        canvas.drawCircle(Offset(x, y), size.height * 0.045, headPaint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_ViewSimulationPainter old) => old.rowIndex != rowIndex || old.totalRows != totalRows;
 }

@@ -6,9 +6,7 @@ import 'package:http/http.dart' as http;
 import '../../../core/constants.dart';
 import 'admin_audit_log.dart';
 
-/// Gửi thông báo tới toàn bộ user - trước đây admin không có cách nào báo
-/// tin (khuyến mãi mới, bảo trì hệ thống...) cho tất cả khách hàng cùng lúc,
-/// chỉ có thông báo tự động theo từng hành động (đặt vé/hủy vé...).
+/// Gửi thông báo tới người dùng theo phân khúc cụ thể (Marketing & Admin tool)
 class AdminBroadcastScreen extends StatefulWidget {
   const AdminBroadcastScreen({super.key});
 
@@ -20,6 +18,16 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
   final _titleCtrl = TextEditingController();
   final _bodyCtrl = TextEditingController();
   bool _sending = false;
+  
+  String _selectedSegment = 'all';
+  final Map<String, String> _segments = const {
+    'all': 'Tất cả thành viên',
+    'diamond': 'Thành viên Kim Cương (>= 1000 điểm)',
+    'gold': 'Thành viên Vàng (>= 500 điểm)',
+    'silver': 'Thành viên Bạc (>= 200 điểm)',
+    'staff': 'Nhân viên rạp (Staff)',
+    'manager': 'Quản lý rạp (Manager)',
+  };
 
   @override
   void dispose() {
@@ -44,8 +52,8 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
         backgroundColor: const Color(0xFF16161F),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('XÁC NHẬN GỬI', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14)),
-        content: const Text('Gửi thông báo này tới TẤT CẢ người dùng? Không thể thu hồi sau khi gửi.',
-            style: TextStyle(color: Colors.white70, fontSize: 13)),
+        content: Text('Gửi thông báo này tới phân khúc [${_segments[_selectedSegment]}]? Không thể thu hồi sau khi gửi.',
+            style: const TextStyle(color: Colors.white70, fontSize: 13)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
           ElevatedButton(
@@ -60,7 +68,21 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
 
     setState(() => _sending = true);
     try {
-      final usersSnap = await FirebaseFirestore.instance.collection('users').get();
+      Query query = FirebaseFirestore.instance.collection('users');
+      if (_selectedSegment == 'diamond') {
+        query = query.where('loyalty_points', isGreaterThanOrEqualTo: 1000);
+      } else if (_selectedSegment == 'gold') {
+        query = query.where('loyalty_points', isGreaterThanOrEqualTo: 500);
+      } else if (_selectedSegment == 'silver') {
+        query = query.where('loyalty_points', isGreaterThanOrEqualTo: 200);
+      } else if (_selectedSegment == 'staff') {
+        query = query.where('role', isEqualTo: 'staff');
+      } else if (_selectedSegment == 'manager') {
+        query = query.where('role', isEqualTo: 'theater_manager');
+      }
+
+      final usersSnap = await query.get();
+      
       // Firestore giới hạn 500 write/batch - chia nhỏ theo lô 400 để an toàn.
       const chunkSize = 400;
       int sent = 0;
@@ -68,13 +90,14 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
         final chunk = usersSnap.docs.skip(i).take(chunkSize);
         final batch = FirebaseFirestore.instance.batch();
         for (final userDoc in chunk) {
-          final email = userDoc.data()['email'] as String?;
-          if (email == null || email.isEmpty) continue;
+          final email = userDoc.data() as Map<String, dynamic>;
+          final userEmail = email['email'] as String?;
+          if (userEmail == null || userEmail.isEmpty) continue;
           final ref = FirebaseFirestore.instance.collection('notifications').doc();
           batch.set(ref, {
             'title': title,
             'body': body,
-            'userEmail': email,
+            'userEmail': userEmail,
             'type': 'broadcast',
             'isRead': false,
             'createdAt': Timestamp.now(),
@@ -84,7 +107,7 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
         await batch.commit();
       }
 
-      // Gửi Push Notification (FCM) qua Backend
+      // Gửi Push Notification (FCM) qua Backend kèm thông tin phân khúc
       final user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         final token = await user.getIdToken();
@@ -99,7 +122,7 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
             body: jsonEncode({
               'title': title,
               'body': body,
-              'topic': 'all_users', // Gửi theo topic hoặc truyền tokens
+              'segment': _selectedSegment,
             }),
           );
         } catch (e) {
@@ -111,12 +134,12 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
         action: 'broadcast_notification',
         targetCollection: 'notifications',
         targetId: 'broadcast_${DateTime.now().millisecondsSinceEpoch}',
-        after: {'title': title, 'body': body, 'recipientCount': sent},
+        after: {'title': title, 'body': body, 'recipientCount': sent, 'segment': _selectedSegment},
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Đã gửi thông báo tới $sent người dùng! (In-app + FCM)'), backgroundColor: Colors.teal),
+          SnackBar(content: Text('Đã gửi thông báo tới $sent thành viên của phân khúc! (In-app + FCM)'), backgroundColor: Colors.teal),
         );
         _titleCtrl.clear();
         _bodyCtrl.clear();
@@ -147,19 +170,60 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
           onPressed: () => Navigator.pop(context),
         ),
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Thông báo sẽ được gửi tới hộp thư trong app của TẤT CẢ người dùng đã đăng ký.',
-                style: TextStyle(color: Colors.white38, fontSize: 12)),
+            const Text(
+              'Chọn phân khúc khách hàng mục tiêu để gửi tin nhắn in-app và đẩy thông báo FCM.',
+              style: TextStyle(color: Colors.white38, fontSize: 12),
+            ),
+            const SizedBox(height: 16),
+            
+            // Dropdown chọn phân khúc
+            const Text(
+              'PHÂN KHÚC KHÁCH HÀNG',
+              style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: const Color(0xFF16161F),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedSegment,
+                  dropdownColor: const Color(0xFF16161F),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.amber),
+                  isExpanded: true,
+                  onChanged: (val) {
+                    if (val != null) setState(() => _selectedSegment = val);
+                  },
+                  items: _segments.entries.map((entry) {
+                    return DropdownMenuItem<String>(
+                      value: entry.key,
+                      child: Text(entry.value),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
             const SizedBox(height: 20),
+            
+            const Text(
+              'NỘI DUNG THÔNG BÁO',
+              style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+            ),
+            const SizedBox(height: 8),
             TextField(
               controller: _titleCtrl,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Tiêu đề (vd: 🎉 Ưu đãi cuối tuần)',
+                hintText: 'Tiêu đề (vd: 🎉 Khuyến mãi bắp nước cuối tuần)',
                 hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
                 filled: true,
                 fillColor: const Color(0xFF16161F),
@@ -170,10 +234,10 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: _bodyCtrl,
-              maxLines: 4,
-              style: const TextStyle(color: Colors.white),
+              maxLines: 5,
+              style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Nội dung thông báo...',
+                hintText: 'Nhập nội dung tin nhắn gửi đi...',
                 hintStyle: const TextStyle(color: Colors.white24, fontSize: 13),
                 filled: true,
                 fillColor: const Color(0xFF16161F),
@@ -181,7 +245,7 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 24),
             SizedBox(
               width: double.infinity,
               height: 48,
@@ -191,10 +255,11 @@ class _AdminBroadcastScreenState extends State<AdminBroadcastScreen> {
                   backgroundColor: Colors.amber,
                   disabledBackgroundColor: Colors.white10,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 2,
                 ),
                 child: _sending
                     ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                    : const Text('GỬI THÔNG BÁO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                    : const Text('GỬI THÔNG BÁO', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 0.5)),
               ),
             ),
           ],

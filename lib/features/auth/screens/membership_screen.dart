@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'dart:math' as math;
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../providers/user_provider.dart';
 
 class MembershipScreen extends ConsumerStatefulWidget {
@@ -11,6 +13,140 @@ class MembershipScreen extends ConsumerStatefulWidget {
 }
 
 class _MembershipScreenState extends ConsumerState<MembershipScreen> {
+  bool _redeeming = false;
+
+  void _redeemVoucher(String uid, int currentPoints, int costPoints, int discountAmount, String rewardName) async {
+    if (currentPoints < costPoints) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Bạn không đủ điểm tích lũy để đổi ưu đãi này!'), backgroundColor: Colors.redAccent),
+      );
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16161F),
+        title: const Text('Xác nhận đổi điểm', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        content: Text(
+          'Bạn có muốn dùng $costPoints điểm tích lũy để đổi "$rewardName" trị giá $discountAmountđ không?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Hủy', style: TextStyle(color: Colors.white38)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+            child: const Text('Đổi ngay', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _redeeming = true);
+
+    try {
+      final userRef = FirebaseFirestore.instance.collection('users').doc(uid);
+      final randStr = math.Random().nextInt(900000) + 100000;
+      final voucherCode = 'STELLA_REDEEM_$randStr';
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final userSnapshot = await transaction.get(userRef);
+        if (!userSnapshot.exists) {
+          throw 'Không tìm thấy thông tin tài khoản!';
+        }
+
+        final int points = (userSnapshot.data()?['loyalty_points'] as num? ?? 0).toInt();
+        if (points < costPoints) {
+          throw 'Bạn không đủ điểm!';
+        }
+
+        transaction.update(userRef, {
+          'loyalty_points': points - costPoints,
+        });
+
+        final voucherRef = FirebaseFirestore.instance.collection('vouchers').doc(voucherCode);
+        transaction.set(voucherRef, {
+          'status': 'active',
+          'expiresAt': Timestamp.fromDate(DateTime.now().add(const Duration(days: 30))),
+          'maxUses': 1,
+          'currentUses': 0,
+          'discountPercent': 0,
+          'discountAmount': discountAmount,
+          'minOrder': discountAmount,
+          'theaterScope': null,
+          'createdAt': FieldValue.serverTimestamp(),
+          'redeemedBy': uid,
+        });
+      });
+
+      ref.invalidate(userProfileProvider);
+
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF16161F),
+            title: const Text('Đổi điểm thành công! 🎉', style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Voucher của bạn đã được khởi tạo thành công và có hạn dùng trong 30 ngày.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black26,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.3)),
+                  ),
+                  child: Center(
+                    child: SelectableText(
+                      voucherCode,
+                      style: const TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 16, letterSpacing: 1.0),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Center(
+                  child: Text(
+                    'Hãy sao chép mã trên và nhập tại bước thanh toán bắp nước!',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Đóng', style: TextStyle(color: Colors.tealAccent)),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _redeeming = false);
+    }
+  }
+
   Map<String, dynamic> _getTierInfo(int points) {
     if (points >= 10000) {
       return {
@@ -130,6 +266,41 @@ class _MembershipScreenState extends ConsumerState<MembershipScreen> {
                   ),
                 ],
 
+                 const SizedBox(height: 32),
+
+                // 2.5 Đổi Ưu Đãi Thành Viên
+                const Text('ĐỔI ƯU ĐÃI THÀNH VIÊN', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                const SizedBox(height: 16),
+                _buildRedeemOfferCard(
+                  context: context,
+                  uid: profile.uid,
+                  currentPoints: points,
+                  title: 'Voucher Combo Solo bắp nước',
+                  desc: 'Đổi lấy voucher giảm 70.000đ khi đặt Combo Solo',
+                  cost: 700,
+                  discount: 70000,
+                ),
+                const SizedBox(height: 12),
+                _buildRedeemOfferCard(
+                  context: context,
+                  uid: profile.uid,
+                  currentPoints: points,
+                  title: 'Voucher Ưu Đãi Vé xem phim',
+                  desc: 'Đổi lấy voucher giảm 50.000đ áp dụng cho mọi hóa đơn',
+                  cost: 500,
+                  discount: 50000,
+                ),
+                const SizedBox(height: 12),
+                _buildRedeemOfferCard(
+                  context: context,
+                  uid: profile.uid,
+                  currentPoints: points,
+                  title: 'Voucher Super Combo bắp nước',
+                  desc: 'Đổi lấy voucher giảm 110.000đ khi đặt Combo Couple/Gia đình',
+                  cost: 1100,
+                  discount: 110000,
+                ),
+
                 const SizedBox(height: 40),
 
                 // 3. Benefits
@@ -248,6 +419,85 @@ class _MembershipScreenState extends ConsumerState<MembershipScreen> {
                 ],
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRedeemOfferCard({
+    required BuildContext context,
+    required String uid,
+    required int currentPoints,
+    required String title,
+    required String desc,
+    required int cost,
+    required int discount,
+  }) {
+    final bool canRedeem = currentPoints >= cost;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16161F),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF2A2A35)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.card_giftcard_rounded, color: Colors.amber, size: 24),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  desc,
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.stars_rounded, color: Colors.amber, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$cost điểm',
+                      style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          ElevatedButton(
+            onPressed: canRedeem && !_redeeming 
+                ? () => _redeemVoucher(uid, currentPoints, cost, discount, title) 
+                : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber,
+              disabledBackgroundColor: Colors.white10,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text(
+              _redeeming ? '...' : 'ĐỔI QUÀ',
+              style: TextStyle(
+                color: canRedeem ? Colors.black : Colors.white30,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
           ),
         ],
       ),

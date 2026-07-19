@@ -1,21 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/room_layout.dart';
+import '../../../models/showtime.dart';
 import '../widgets/seat_grid_widget.dart';
 
-// Bảng cấu hình định dạng phòng (kRoomFormatSpecs), enum SeatLayoutKind, và
-// helper roomFormatsForTheaterSize/findRoomFormatSpec đều sống ở
+// Bảng cấu hình định dạng phòng, enum SeatLayoutKind, và helper
+// roomFormatsForTheaterSize/findRoomFormatSpec đều sống ở
 // models/room_layout.dart (data domain dùng chung cho cả UI lẫn migration ở
 // db_updater.dart) - ở đây chỉ derive vài hằng số/hàm tiện dùng riêng cho UI.
+// Đọc qua liveRoomFormatSpecs (cache đồng bộ, cập nhật ngầm từ collection
+// Firestore 'room_formats') thay vì hằng số hardcode - để định dạng admin tự
+// thêm mới qua AdminRoomFormatsScreen xuất hiện ngay ở đây không cần build lại app.
 
-List<String> get kRoomFormats => kRoomFormatSpecs.map((s) => s.name).toList();
+List<String> get kRoomFormats => liveRoomFormatSpecs.map((s) => s.name).toList();
 
 /// Định dạng "cao cấp trở lên": áp giá vé cao hơn phòng thường (xem
 /// seat_booking_screen.dart) và không được áp dụng ưu đãi Thứ 4 (xem
 /// discount_service.dart) - vì đây đã là phân khúc cao cấp, không cần
 /// thêm khuyến mãi giảm giá sâu.
 Set<String> get kPremiumRoomFormats =>
-    kRoomFormatSpecs.where((s) => s.isPremium).map((s) => s.name).toSet();
+    liveRoomFormatSpecs.where((s) => s.isPremium).map((s) => s.name).toSet();
 
 Color roomFormatColor(String? format) => findRoomFormatSpec(format)?.color ?? Colors.blueAccent;
 
@@ -81,13 +85,19 @@ class RoomManagementScreen extends StatelessWidget {
               final d = docs[i].data() as Map<String, dynamic>;
               final format = d['roomFormat'] as String? ?? 'Standard';
               final color = roomFormatColor(format);
+              // Trạng thái vận hành của phòng (Giai đoạn E): ACTIVE (mặc
+              // định) / MAINTENANCE (đang sửa chữa - không tạo được suất
+              // chiếu mới, suất đã có không ảnh hưởng). Không xoá phòng khi
+              // ngưng dùng - dùng trạng thái này thay thế.
+              final roomStatus = d['status'] as String? ?? 'ACTIVE';
+              final isMaintenance = roomStatus == 'MAINTENANCE';
               return Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
                   color: const Color(0xFF16161F),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.deepPurpleAccent.withOpacity(0.15)),
+                  border: Border.all(color: Colors.deepPurpleAccent.withValues(alpha: 0.15)),
                 ),
                 child: Row(
                   children: [
@@ -103,9 +113,20 @@ class RoomManagementScreen extends StatelessWidget {
                               const SizedBox(width: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(6)),
+                                decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
                                 child: Text(format, style: TextStyle(color: color, fontSize: 9, fontWeight: FontWeight.bold)),
                               ),
+                              if (isMaintenance) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                      color: Colors.orangeAccent.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(6)),
+                                  child: const Text('BẢO TRÌ',
+                                      style: TextStyle(color: Colors.orangeAccent, fontSize: 9, fontWeight: FontWeight.bold)),
+                                ),
+                              ],
                             ],
                           ),
                           const SizedBox(height: 4),
@@ -123,14 +144,23 @@ class RoomManagementScreen extends StatelessWidget {
                         if (v == 'edit') {
                           _RoomDialog.show(context, theater: theater, existing: docs[i]);
                         } else if (v == 'delete') {
-                          await docs[i].reference.delete();
+                          await _confirmAndDeleteRoom(context, docs[i], theater);
                         } else if (v == 'maintenance') {
                           _SeatMaintenanceDialog.show(context, roomDoc: docs[i]);
+                        } else if (v == 'roomStatus') {
+                          await docs[i].reference.update({'status': isMaintenance ? 'ACTIVE' : 'MAINTENANCE'});
                         }
                       },
                       itemBuilder: (_) => [
                         const PopupMenuItem(value: 'edit', child: Text('Chỉnh sửa', style: TextStyle(color: Colors.white))),
                         const PopupMenuItem(value: 'maintenance', child: Text('Bảo trì ghế', style: TextStyle(color: Colors.orangeAccent))),
+                        PopupMenuItem(
+                          value: 'roomStatus',
+                          child: Text(
+                            isMaintenance ? 'Mở lại phòng' : 'Bảo trì cả phòng',
+                            style: TextStyle(color: isMaintenance ? Colors.greenAccent : Colors.deepOrangeAccent),
+                          ),
+                        ),
                         const PopupMenuItem(value: 'delete', child: Text('Xóa', style: TextStyle(color: Colors.redAccent))),
                       ],
                     ),
@@ -142,6 +172,75 @@ class RoomManagementScreen extends StatelessWidget {
         },
       ),
     );
+  }
+}
+
+/// Chặn xoá phòng nếu còn suất chiếu `active` chưa diễn ra - trước đây xoá
+/// phòng không kiểm tra gì cả, để lại suất chiếu "mồ côi" (phòng không còn
+/// tồn tại nhưng suất chiếu vẫn hiển thị cho khách đặt vé, seat_booking_screen.dart
+/// sẽ không tìm được sơ đồ ghế cho suất chiếu mới tạo sau đó vì phòng đã mất -
+/// vé/suất chiếu CŨ đã có seatMapVersionId riêng vẫn không bị ảnh hưởng, xem
+/// models/showtime.dart). Quản lý phải huỷ hoặc đổi phòng cho các suất chiếu
+/// đó trước khi xoá được phòng.
+Future<void> _confirmAndDeleteRoom(BuildContext context, QueryDocumentSnapshot roomDoc, String theater) async {
+  final roomData = roomDoc.data() as Map<String, dynamic>;
+  final roomName = roomData['roomName'] as String? ?? '';
+
+  final now = DateTime.now();
+  final showtimesSnap = await FirebaseFirestore.instance
+      .collection('showtimes')
+      .where('theaterName', isEqualTo: theater)
+      .where('roomName', isEqualTo: roomName)
+      .where('status', isEqualTo: 'active')
+      .get();
+  final upcomingCount = showtimesSnap.docs
+      .map((d) => Showtime.fromMap(d.id, d.data()).showAt)
+      .where((showAt) => showAt == null || showAt.isAfter(now))
+      .length;
+
+  if (!context.mounted) return;
+
+  if (upcomingCount > 0) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF16161F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('KHÔNG THỂ XOÁ PHÒNG', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+        content: Text(
+          'Phòng "$roomName" còn $upcomingCount suất chiếu chưa diễn ra. Vui lòng huỷ hoặc chuyển các suất chiếu đó sang phòng khác trước khi xoá phòng này.',
+          style: const TextStyle(color: Colors.white70, fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('ĐÃ HIỂU', style: TextStyle(color: Colors.grey))),
+        ],
+      ),
+    );
+    return;
+  }
+
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: const Color(0xFF16161F),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('XOÁ PHÒNG CHIẾU', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+      content: Text(
+        'Bạn có chắc muốn xoá phòng "$roomName"? Suất chiếu/vé cũ (nếu có, đã qua) vẫn giữ đúng sơ đồ ghế lịch sử, không bị ảnh hưởng.',
+        style: const TextStyle(color: Colors.white70, fontSize: 13),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+          child: const Text('XOÁ', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true) {
+    await roomDoc.reference.delete();
   }
 }
 
@@ -171,6 +270,14 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
   // chọn (roomFormatsForTheaterSize). null trong lúc đang tải.
   String? _theaterSize;
 
+  // Danh sách tổ hợp trình chiếu/âm thanh phòng này hỗ trợ (RoomCapability,
+  // xem models/room_layout.dart) - tách khỏi _format (vốn chỉ quyết định
+  // loại ghế + phân khúc giá). 1 phòng IMAX có thể vừa chiếu IMAX 2D vừa
+  // IMAX 3D, nên đây là danh sách chứ không phải 1 giá trị.
+  List<RoomCapability> _capabilities = [];
+  String _newProjection = kProjectionFormats.first;
+  String _newSound = kSoundFormats.first;
+
   @override
   void initState() {
     super.initState();
@@ -182,6 +289,9 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
       _sweetCtrl.text = '${d['sweetboxRows'] ?? 2}';
       _perRowCtrl.text = '${d['seatsPerRow'] ?? 10}';
       _format = (d['roomFormat'] as String?) ?? kRoomFormats.first;
+      _capabilities = parseCapabilities(d['capabilities'], _format);
+    } else {
+      _capabilities = defaultCapabilitiesForFormat(_format);
     }
     _loadTheaterSize();
   }
@@ -247,7 +357,8 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
             _field(_nameCtrl, 'Tên phòng (VD: Phòng 1)', Icons.weekend_rounded),
             const SizedBox(height: 10),
             DropdownButtonFormField<String>(
-              value: _format,
+              isExpanded: true,
+              initialValue: _format,
               dropdownColor: const Color(0xFF1E1E2A),
               decoration: InputDecoration(
                 filled: true,
@@ -279,6 +390,74 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
                   ),
                 ),
               ),
+            const SizedBox(height: 14),
+            const Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Định dạng trình chiếu phòng này hỗ trợ',
+                  style: TextStyle(color: Colors.white54, fontSize: 11, fontWeight: FontWeight.bold)),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final cap in _capabilities)
+                  Chip(
+                    backgroundColor: const Color(0xFF1E1E2A),
+                    label: Text(cap.label, style: const TextStyle(color: Colors.white, fontSize: 11)),
+                    deleteIconColor: Colors.white38,
+                    onDeleted: _capabilities.length > 1
+                        ? () => setState(() => _capabilities.remove(cap))
+                        : null,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  initialValue: _newProjection,
+                  dropdownColor: const Color(0xFF1E1E2A),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: const Color(0xFF1E1E2A),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  items: kProjectionFormats.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                  onChanged: (v) => setState(() => _newProjection = v ?? kProjectionFormats.first),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  initialValue: _newSound,
+                  dropdownColor: const Color(0xFF1E1E2A),
+                  decoration: InputDecoration(
+                    filled: true,
+                    fillColor: const Color(0xFF1E1E2A),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  items: kSoundFormats.map((f) => DropdownMenuItem(value: f, child: Text(f))).toList(),
+                  onChanged: (v) => setState(() => _newSound = v ?? kSoundFormats.first),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.add_circle_rounded, color: Colors.deepPurpleAccent),
+                onPressed: () {
+                  final newCap = RoomCapability(projectionFormat: _newProjection, soundFormat: _newSound);
+                  if (_capabilities.contains(newCap)) return;
+                  setState(() => _capabilities.add(newCap));
+                },
+              ),
+            ]),
             const SizedBox(height: 10),
             Row(children: [
               Expanded(child: _field(_stdCtrl, 'Hàng Thường', Icons.event_seat_rounded, type: TextInputType.number)),
@@ -333,7 +512,15 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
   Future<void> _save() async {
     final roomName = _nameCtrl.text.trim();
     if (roomName.isEmpty) return;
-    final data = {
+
+    // Các field ảnh hưởng sơ đồ ghế thật (số hàng/ghế, kiểu ghế, ghế hỏng)
+    // được snapshot vào 1 document `seat_map_versions` MỚI mỗi lần lưu, thay
+    // vì update tại chỗ trên document phòng - suất chiếu nào đã chốt
+    // seatMapVersionId trước đó (xem models/showtime.dart) sẽ luôn tra đúng
+    // sơ đồ tại thời điểm bán vé, không bị lệch khi phòng được sửa sau này.
+    // `rooms/{id}` vẫn giữ 1 bản sao các field này (đọc nhanh cho danh sách/
+    // dropdown), nhưng `seat_map_versions` mới là nguồn lịch sử thật.
+    final layoutFields = {
       'theaterName': widget.theater,
       'roomName': roomName,
       'roomFormat': _format,
@@ -342,12 +529,38 @@ class _RoomDialogWidgetState extends State<_RoomDialogWidget> {
       'sweetboxRows': int.tryParse(_sweetCtrl.text) ?? 2,
       'seatsPerRow': int.tryParse(_perRowCtrl.text) ?? 10,
       'seatLayoutKind': seatLayoutKindToString(seatLayoutKindForFormat(_format)),
+      'brokenSeats': (widget.existing?.data() as Map<String, dynamic>?)?['brokenSeats'] ?? [],
+      'wheelchairSeats': (widget.existing?.data() as Map<String, dynamic>?)?['wheelchairSeats'] ?? [],
     };
-    if (widget.existing != null) {
-      await widget.existing!.reference.update(data);
-    } else {
-      await FirebaseFirestore.instance.collection('rooms').add(data);
+    final roomData = {
+      ...layoutFields,
+      'capabilities': _capabilities.map((c) => c.toMap()).toList(),
+    };
+
+    final firestore = FirebaseFirestore.instance;
+    final roomRef = widget.existing?.reference ?? firestore.collection('rooms').doc();
+    final prevVersionId = (widget.existing?.data() as Map<String, dynamic>?)?['currentSeatMapVersionId'] as String?;
+    final prevVersionNum = widget.existing == null
+        ? 0
+        : (prevVersionId != null
+            ? ((await firestore.collection('seat_map_versions').doc(prevVersionId).get()).data()?['version'] as num? ?? 0).toInt()
+            : 0);
+
+    final newVersionRef = firestore.collection('seat_map_versions').doc();
+    final batch = firestore.batch();
+    batch.set(newVersionRef, {
+      ...layoutFields,
+      'roomId': roomRef.id,
+      'version': prevVersionNum + 1,
+      'status': 'active',
+      'createdAt': Timestamp.now(),
+    });
+    if (prevVersionId != null) {
+      batch.update(firestore.collection('seat_map_versions').doc(prevVersionId), {'status': 'superseded'});
     }
+    batch.set(roomRef, {...roomData, 'currentSeatMapVersionId': newVersionRef.id}, SetOptions(merge: true));
+    await batch.commit();
+
     if (mounted) Navigator.pop(context);
   }
 }
@@ -367,6 +580,8 @@ class _SeatMaintenanceDialog extends StatefulWidget {
 class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
   late RoomLayout _layout;
   late Set<String> _brokenSeats;
+  late Set<String> _wheelchairSeats;
+  MaintenanceTarget _target = MaintenanceTarget.broken;
   bool _saving = false;
 
   @override
@@ -375,6 +590,7 @@ class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
     final d = widget.roomDoc.data() as Map<String, dynamic>;
     _layout = RoomLayout.fromMap(widget.roomDoc.id, d);
     _brokenSeats = {..._layout.brokenSeats};
+    _wheelchairSeats = {..._layout.wheelchairSeats};
   }
 
   void _toggleSeat(String seatId) {
@@ -387,12 +603,38 @@ class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
     });
   }
 
+  void _toggleWheelchair(String seatId) {
+    setState(() {
+      if (_wheelchairSeats.contains(seatId)) {
+        _wheelchairSeats.remove(seatId);
+      } else {
+        _wheelchairSeats.add(seatId);
+      }
+    });
+  }
+
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await widget.roomDoc.reference.update({
+      // Đánh dấu ghế hỏng là thao tác bảo trì tạm thời (KHÔNG phải đổi cấu
+      // trúc phòng như số hàng/ghế), nên ghi thẳng vào version hiện tại thay
+      // vì tạo version mới (tránh version tăng vô tội vạ mỗi lần bật/tắt 1
+      // ghế hỏng). Ghi cả vào document phòng để giữ bản sao cache hiển thị
+      // nhanh (room_management_screen.dart list, seat_grid_widget mặc định).
+      final currentVersionId = (widget.roomDoc.data() as Map<String, dynamic>)['currentSeatMapVersionId'] as String?;
+      final maintenanceFields = {
         'brokenSeats': _brokenSeats.toList(),
-      });
+        'wheelchairSeats': _wheelchairSeats.toList(),
+      };
+      final batch = FirebaseFirestore.instance.batch();
+      batch.update(widget.roomDoc.reference, maintenanceFields);
+      if (currentVersionId != null) {
+        batch.update(
+          FirebaseFirestore.instance.collection('seat_map_versions').doc(currentVersionId),
+          maintenanceFields,
+        );
+      }
+      await batch.commit();
       if (mounted) Navigator.pop(context);
     } catch (e) {
       setState(() => _saving = false);
@@ -410,8 +652,38 @@ class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('Chạm vào ghế để đánh dấu hỏng/bảo trì', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 20),
+              const Text('Chạm vào ghế để đánh dấu/gỡ đánh dấu theo loại đang chọn', style: TextStyle(color: Colors.white70, fontSize: 13)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ChoiceChip(
+                      label: const Text('GHẾ HỎNG', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      avatar: Icon(Icons.build_rounded, size: 14,
+                          color: _target == MaintenanceTarget.broken ? Colors.black : Colors.redAccent),
+                      selected: _target == MaintenanceTarget.broken,
+                      selectedColor: Colors.redAccent,
+                      backgroundColor: const Color(0xFF16161F),
+                      labelStyle: TextStyle(color: _target == MaintenanceTarget.broken ? Colors.black : Colors.white70),
+                      onSelected: (_) => setState(() => _target = MaintenanceTarget.broken),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ChoiceChip(
+                      label: const Text('GHẾ XE LĂN', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                      avatar: Icon(Icons.accessible_rounded, size: 14,
+                          color: _target == MaintenanceTarget.wheelchair ? Colors.black : Colors.blueAccent),
+                      selected: _target == MaintenanceTarget.wheelchair,
+                      selectedColor: Colors.blueAccent,
+                      backgroundColor: const Color(0xFF16161F),
+                      labelStyle: TextStyle(color: _target == MaintenanceTarget.wheelchair ? Colors.black : Colors.white70),
+                      onSelected: (_) => setState(() => _target = MaintenanceTarget.wheelchair),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
               // Screen curve
               Container(
                 height: 40,
@@ -431,8 +703,11 @@ class _SeatMaintenanceDialogState extends State<_SeatMaintenanceDialog> {
               SeatGridView(
                 layout: _layout,
                 mode: SeatGridMode.maintenance,
+                maintenanceTarget: _target,
                 brokenSeats: _brokenSeats,
+                wheelchairSeats: _wheelchairSeats,
                 onToggleBroken: _toggleSeat,
+                onToggleWheelchair: _toggleWheelchair,
                 dense: true,
               ),
             ],

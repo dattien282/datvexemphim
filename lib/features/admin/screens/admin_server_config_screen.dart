@@ -22,6 +22,7 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
   bool _isUpdatingDb = false;
   bool _isMigratingShowtimes = false;
   bool _isMigratingFormats = false;
+  bool _isSeedingRoomFormats = false;
 
   @override
   void initState() {
@@ -114,6 +115,24 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
       }
     } finally {
       if (mounted) setState(() => _isMigratingFormats = false);
+    }
+  }
+
+  Future<void> _runSeedRoomFormats() async {
+    setState(() => _isSeedingRoomFormats = true);
+    try {
+      await migrateRoomFormatsToFirestore();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã seed danh mục định dạng phòng vào Firestore (bỏ qua nếu đã có sẵn)!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isSeedingRoomFormats = false);
     }
   }
 
@@ -241,6 +260,27 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
                       child: _isMigratingFormats
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Text('MIGRATE ĐỊNH DẠNG PHÒNG → STELLA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Đưa 13 định dạng phòng chiếu mặc định (Standard, VIP, IMAX, 4DX...) vào collection "room_formats" - sau bước này admin tự thêm/sửa định dạng qua màn "Định dạng phòng chiếu" mà không cần sửa code. Chỉ chạy 1 lần (bỏ qua nếu đã có dữ liệu).',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _isSeedingRoomFormats ? null : _runSeedRoomFormats,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.indigoAccent,
+                        disabledBackgroundColor: Colors.white10,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: _isSeedingRoomFormats
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('SEED DANH MỤC ĐỊNH DẠNG PHÒNG', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],

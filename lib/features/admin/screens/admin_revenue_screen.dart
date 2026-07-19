@@ -47,7 +47,7 @@ class _AdminRevenueScreenState extends ConsumerState<AdminRevenueScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF16161F),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Colors.white.withOpacity(0.05)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -64,7 +64,8 @@ class _AdminRevenueScreenState extends ConsumerState<AdminRevenueScreen> {
                 ),
                 const SizedBox(height: 10),
                 DropdownButtonFormField<String?>(
-                  value: _theaterFilter,
+                  isExpanded: true,
+                  initialValue: _theaterFilter,
                   dropdownColor: const Color(0xFF1E1E2A),
                   decoration: InputDecoration(
                     filled: true,
@@ -444,9 +445,9 @@ class _ReportBody extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.2)),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [

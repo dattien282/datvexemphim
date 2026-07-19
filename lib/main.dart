@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -13,7 +12,11 @@ import 'features/admin/screens/admin_dashboard_screen.dart';
 import 'features/staff/screens/staff_dashboard_screen.dart';
 import 'features/theater_manager/screens/theater_manager_dashboard_screen.dart';
 import 'features/notifications/screens/notification_service.dart';
+import 'features/notifications/services/notification_router.dart';
 import 'providers/user_provider.dart';
+import 'providers/room_formats_provider.dart';
+import 'models/room_layout.dart' show updateRoomFormatCache;
+import 'core/widgets/global_internet_check_widget.dart';
 
 // ✅ 1. HÀM XỬ LÝ BACKGROUND KHI TẮT APP
 @pragma('vm:entry-point')
@@ -53,6 +56,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: NotificationRouter.navigatorKey,
       title: 'Stella Cinema',
       debugShowCheckedModeBanner: false, // tắt dải "DEBUG" đỏ ở góc màn hình
       theme: ThemeData.dark(),
@@ -69,33 +73,46 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class MainAppWrapper extends StatefulWidget {
+class MainAppWrapper extends ConsumerStatefulWidget {
   const MainAppWrapper({super.key});
 
   @override
-  State<MainAppWrapper> createState() => _MainAppWrapperState();
+  ConsumerState<MainAppWrapper> createState() => _MainAppWrapperState();
 }
 
-class _MainAppWrapperState extends State<MainAppWrapper> {
+class _MainAppWrapperState extends ConsumerState<MainAppWrapper> {
+  ProviderSubscription? _roomFormatsSub;
+
   @override
   void initState() {
     super.initState();
     // Kích hoạt ngầm cấu hình thông báo đẩy (FCM & Local Popup) mà không gây nghẽn giao diện khởi động
     _setupPushNotifications();
     _checkCurrentUser();
+    // Đồng bộ cache đồng bộ (models/room_layout.dart) từ collection Firestore
+    // 'room_formats' trong suốt vòng đời app - đây là ĐIỂM DUY NHẤT app lắng
+    // nghe stream này, để 25+ nơi gọi findRoomFormatSpec/roomFormatColor/...
+    // ở khắp app đọc được đồng bộ mà không cần tự watch provider. Dùng
+    // listenManual (thay vì ref.listen trong build) vì cần chạy 1 lần cho cả
+    // vòng đời widget gốc, không phụ thuộc rebuild - phải tự đóng ở dispose().
+    _roomFormatsSub = ref.listenManual(roomFormatsProvider, (previous, next) {
+      next.whenData(updateRoomFormatCache);
+    }, fireImmediately: true);
+  }
+
+  @override
+  void dispose() {
+    _roomFormatsSub?.close();
+    super.dispose();
   }
 
   void _checkCurrentUser() async {
-    // Force sign out on startup so it always shows the welcome/login screen
-    await FirebaseAuth.instance.signOut();
-    
-    // Auto-login logic disabled per user request
-    // final user = FirebaseAuth.instance.currentUser;
-    // if (user != null) {
-    //   WidgetsBinding.instance.addPostFrameCallback((_) async {
-    //     await _navigateByRole(user.uid);
-    //   });
-    // }
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await _navigateByRole(user.uid);
+      });
+    }
   }
 
   Future<void> _navigateByRole(String uid) async {
@@ -167,6 +184,21 @@ class _MainAppWrapperState extends State<MainAppWrapper> {
       // 5. Lấy FCM Token để kiểm tra kết nối nếu cần
       String? token = await messaging.getToken();
       print("FCM TOKEN CHÍNH CHỦ: $token");
+
+      // 6. Bấm vào thông báo khi app đang chạy nền (background) - mở đúng
+      // màn hình ưu đãi/phim theo field 'type' trong data payload (xem
+      // NotificationRouter). Trước đây chỉ log ra console, không mở gì cả.
+      FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
+        NotificationRouter.handleTap(message.data);
+      });
+
+      // 7. Bấm vào thông báo khi app ĐÃ TẮT HẲN (không có process nào chạy) -
+      // onMessageOpenedApp ở trên KHÔNG bắt được trường hợp này, phải hỏi
+      // riêng getInitialMessage() lúc khởi động.
+      final initialMessage = await messaging.getInitialMessage();
+      if (initialMessage != null) {
+        NotificationRouter.handleTap(initialMessage.data);
+      }
     } catch (e) {
       print("Lỗi thiết lập thông báo đẩy: $e");
     }
@@ -183,78 +215,4 @@ class _MainAppWrapperState extends State<MainAppWrapper> {
 
 
 
-class GlobalInternetCheckWidget extends StatefulWidget {
-  const GlobalInternetCheckWidget({super.key});
 
-  @override
-  State<GlobalInternetCheckWidget> createState() => _GlobalInternetCheckWidgetState();
-}
-
-class _GlobalInternetCheckWidgetState extends State<GlobalInternetCheckWidget> {
-  bool _hasInternet = true;
-  Timer? _timer;
-
-  @override
-  void initState() {
-    super.initState();
-    _checkConnection();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => _checkConnection());
-  }
-
-  @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  Future<void> _checkConnection() async {
-    try {
-      final result = await InternetAddress.lookup('google.com').timeout(const Duration(seconds: 3));
-      final connected = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
-      if (mounted && _hasInternet != connected) {
-        setState(() {
-          _hasInternet = connected;
-        });
-      }
-    } catch (_) {
-      if (mounted && _hasInternet) {
-        setState(() {
-          _hasInternet = false;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_hasInternet) return const SizedBox.shrink();
-    return Align(
-      alignment: Alignment.topCenter,
-      child: SafeArea(
-        child: Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.redAccent.withOpacity(0.95),
-            borderRadius: BorderRadius.circular(10),
-            boxShadow: const [BoxShadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 2))],
-          ),
-          child: const Material(
-            color: Colors.transparent,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
-                SizedBox(width: 8),
-                Text(
-                  'Mất kết nối Internet! Đang kiểm tra lại...',
-                  style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

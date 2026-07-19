@@ -104,6 +104,26 @@ service cloud.firestore {
     match /rooms/{document=**} {
       allow read: if true;
       allow write: if isAdmin() || isTheaterManager();
+      // Staff soát vé được đánh dấu ghế hỏng/ghế xe lăn tại quầy
+      // (staff_seat_maintenance_screen.dart) - CHỈ 2 field này, không được
+      // đổi cấu trúc phòng (số hàng/định dạng/tên phòng...). Trước đây thiếu
+      // hẳn quyền này nên staff bấm đánh dấu luôn bị permission-denied.
+      allow update: if isStaff()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['brokenSeats', 'wheelchairSeats']);
+    }
+
+    // 2c. COLLECTION 'seat_map_versions' (lịch sử sơ đồ ghế theo từng phòng -
+    // xem models/room_layout.dart SeatMapVersion, models/showtime.dart
+    // Showtime.seatMapVersionId). Cùng quyền ghi với 'rooms' vì được tạo/sửa
+    // cùng lúc với phòng ở room_management_screen.dart.
+    match /seat_map_versions/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin() || isTheaterManager();
+      // Cùng lý do với 'rooms' ở trên - staff đánh dấu ghế hỏng/xe lăn cũng
+      // ghi đồng thời vào version hiện hành để suất chiếu mới tạo sau đó
+      // thấy đúng trạng thái ghế.
+      allow update: if isStaff()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['brokenSeats', 'wheelchairSeats']);
     }
 
     // COLLECTION 'combos' (Combo bắp nước - combo_selection_screen.dart)
@@ -124,19 +144,35 @@ service cloud.firestore {
       allow write: if isAdmin() || isTheaterManager() || isMarketing();
     }
 
-    // 4. COLLECTION 'temporary_locks' (Khoá ghế)
-    match /temporary_locks/{lockId} {
-      // Đọc: Ai cũng được đọc để biết ghế nào bị khoá
+    // 3b. COLLECTION 'pricing_rules' (Luật giá cấu hình được - Giai đoạn D,
+    // xem pricing_service.dart PricingEngine + server.js loadPricingRules).
+    // Ai cũng đọc được (app cần tính giá hiển thị trước khi đăng nhập xong),
+    // chỉ Admin sửa được - luật giá là quyết định kinh doanh cấp hệ thống,
+    // không giao cho theater_manager/marketing.
+    match /pricing_rules/{document=**} {
       allow read: if true;
-      
-      // Tạo: User tự tạo khoá ghế cho mình. Client ghi field 'lockedBy' (email),
-      // không phải 'userId' - xem seat_booking_screen.dart _onSeatTap.
-      allow create: if isAuthenticated() && request.resource.data.lockedBy == request.auth.token.email;
-
-      // Sửa/Xoá: Chỉ người tạo ra khoá ghế đó mới được xoá (huỷ thanh toán)
-      // hoặc Admin/Backend sẽ tự dọn dẹp các khoá hết hạn
-      allow update, delete: if isAuthenticated() && (resource.data.lockedBy == request.auth.token.email || isAdmin());
+      allow write: if isAdmin();
     }
+
+    // 3c. COLLECTION 'room_formats' (Giai đoạn H - danh mục định dạng phòng
+    // chiếu Standard/VIP/IMAX/4DX/Gold Class... xem models/room_layout.dart
+    // RoomFormatSpec, providers/room_formats_provider.dart). Ai cũng đọc được
+    // (client cần map roomFormat -> màu/hint/preset hàng ghế trước khi đăng
+    // nhập xong, giống 'pricing_rules'), chỉ Admin sửa - đổi danh mục định
+    // dạng phòng là quyết định kinh doanh cấp hệ thống, không giao cho
+    // theater_manager (giống pricing_rules, không phải operational data như
+    // 'rooms' - theater_manager chỉ CHỌN định dạng có sẵn cho phòng của
+    // mình, không được TẠO/XOÁ định dạng mới).
+    match /room_formats/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 4. COLLECTION 'temporary_locks' - ĐÃ NGỪNG SỬ DỤNG từ Giai đoạn C
+    // (thay bằng subcollection showtimes/{id}/seats + backend /seats/hold,
+    // xem mục 4c bên dưới). Không còn match block = rơi vào deny-all mặc
+    // định, chặn mọi client cũ còn ghi vào đây. Admin xoá dữ liệu còn sót
+    // trong collection này qua Firebase Console nếu muốn dọn.
 
     // 4b. COLLECTION 'showtime_seat_status' (Trạng thái ghế theo suất chiếu,
     // dùng để check-and-set atomic trong 1 transaction khi ghi vé - chặn race
@@ -154,14 +190,59 @@ service cloud.firestore {
                    && request.resource.data.bookedSeatIds is list;
     }
 
+    // 4c. SUBCOLLECTION 'showtimes/{id}/seats' (ShowtimeSeat - Giai đoạn C,
+    // xem models/showtime.dart Showtime.seatMapVersionId). Thay
+    // 'showtime_seat_status' (1 document gộp/suất chiếu) bằng 1 document
+    // riêng mỗi ghế - có giá + trạng thái (AVAILABLE/HOLDING/BOOKED/BLOCKED/
+    // UNAVAILABLE) + hold token riêng, không còn phụ thuộc mảng dùng chung dễ
+    // đụng độ. 2 quyền ghi khác nhau:
+    //  - Admin/Manager: toàn quyền (sinh ghế lúc tạo suất chiếu, khoá vùng
+    //    ghế BLOCKED cho suất cụ thể - xem room_management_screen.dart).
+    //  - User thường: CHỈ được tự "chốt" ghế MÌNH đang giữ (HOLDING, đúng
+    //    heldBy) thành BOOKED khi tạo vé (payment_service.dart, cùng 1
+    //    transaction với tạo document 'tickets'), hoặc tự trả ghế mình đang
+    //    giữ về AVAILABLE (huỷ giữa chừng, không cần gọi API). KHÔNG được tự
+    //    chuyển ghế AVAILABLE -> HOLDING (phải qua backend /seats/hold - xem
+    //    backend-payos/server.js - để atomic hoá đúng chuẩn, tránh 2 người
+    //    cùng đọc thấy trống rồi cùng ghi đè).
+    match /showtimes/{showtimeId}/seats/{seatId} {
+      allow read: if true;
+      // isStaff() cần quyền ghi trực tiếp (không qua /seats/hold) để bán vé
+      // tại quầy (staff_walkin_sale_screen.dart) - tạo vé COMPLETED ngay, tin
+      // cậy tương đương mức isAuthenticated() mà showtime_seat_status cũ từng
+      // cho phép (ai đăng nhập cũng ghi được document đó).
+      allow write: if isAdmin() || isTheaterManager() || isStaff();
+
+      allow update: if isAuthenticated() && resource.data.status == 'HOLDING' && resource.data.heldBy == request.auth.uid && (
+        (request.resource.data.status == 'BOOKED'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'bookingId', 'version']))
+        ||
+        (request.resource.data.status == 'AVAILABLE'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'holdToken', 'heldBy', 'heldUntil', 'version']))
+      );
+    }
+
     // 5. COLLECTION 'tickets' (Vé xem phim)
     match /tickets/{ticketId} {
       // Đọc: User xem vé của mình. Staff/Manager/Admin xem tất cả. Accountant
       // (admin_revenue_screen.dart) cũng cần đọc toàn bộ vé để tính doanh thu.
       allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isStaff() || isTheaterManager() || isAdmin() || isAccountant());
       
-      // Tạo: User tự tạo vé (PENDING hoặc COMPLETED)
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      // Tạo: User tự tạo vé của chính mình - nhưng CHỈ được ở trạng thái
+      // PENDING (khớp đúng luồng thật ở payment_service.dart: tạo vé PENDING
+      // trước, backend dùng Admin SDK - bỏ qua rules - flip sang COMPLETED
+      // sau khi xác nhận thanh toán qua PayOS webhook/pay-wallet). Trước đây
+      // rule này không giới hạn gì cả ngoài userId, nghĩa là BẤT KỲ user nào
+      // cũng có thể tự ghi thẳng 1 vé paymentStatus:'COMPLETED' qua Firestore
+      // SDK trực tiếp, hoàn toàn bỏ qua PayOS/ví - lỗ hổng "vé miễn phí".
+      // Staff vẫn được tạo vé COMPLETED trực tiếp (bán tại quầy, thu tiền mặt
+      // ngay lúc tạo vé - staff_walkin_sale_screen.dart - không có bước
+      // thanh toán online nào theo sau nên không thể tạo PENDING trước).
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid
+                    && (
+                         (isStaff() || isTheaterManager() || isAdmin())
+                         || request.resource.data.paymentStatus == 'PENDING'
+                       );
       
       // Cập nhật:
       // - Staff cập nhật vé khi quét check-in (isUsed)

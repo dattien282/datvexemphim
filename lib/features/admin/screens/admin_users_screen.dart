@@ -171,7 +171,8 @@ class _UserCard extends StatelessWidget {
                 const Text('Rạp phụ trách:', style: TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
                 DropdownButtonFormField<String>(
-                  value: selectedTheater,
+                  isExpanded: true,
+                  initialValue: selectedTheater,
                   dropdownColor: const Color(0xFF1E1E2A),
                   decoration: InputDecoration(
                     filled: true,
@@ -198,7 +199,7 @@ class _UserCard extends StatelessWidget {
                 final updates = <String, dynamic>{
                   'role': selected.firestoreValue,
                   'isAdmin': selected == UserRole.admin,
-                  if (selectedTheater != null) 'assignedTheater': selectedTheater,
+                  'assignedTheater': ?selectedTheater,
                   if (selected == UserRole.user || selected == UserRole.admin)
                     'assignedTheater': FieldValue.delete(),
                 };
@@ -243,13 +244,13 @@ class _UserCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF16161F),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.12)),
+        border: Border.all(color: color.withValues(alpha: 0.12)),
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: color.withOpacity(0.15),
+            backgroundColor: color.withValues(alpha: 0.15),
             child: Text(initials, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
           ),
           const SizedBox(width: 14),
@@ -270,9 +271,9 @@ class _UserCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       decoration: BoxDecoration(
-                        color: color.withOpacity(0.15),
+                        color: color.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: color.withOpacity(0.3)),
+                        border: Border.all(color: color.withValues(alpha: 0.3)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,

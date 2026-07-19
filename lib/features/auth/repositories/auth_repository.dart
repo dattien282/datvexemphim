@@ -102,6 +102,40 @@ class AuthRepository {
     }
   }
 
+  // Gửi/xác thực mã OTP đăng nhập (2FA qua email) - xem app.post('/auth/send-otp')
+  // và app.post('/auth/verify-otp') ở backend-payos/server.js. Chỉ dùng cho
+  // đăng nhập email/password, không áp dụng cho Google Sign-In.
+  Future<void> sendLoginOtp() async {
+    final idToken = await _auth.currentUser?.getIdToken();
+    final response = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/auth/send-otp'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+    ).timeout(const Duration(seconds: 15));
+    final resData = jsonDecode(response.body);
+    if (resData['success'] != true) {
+      throw Exception(resData['message'] ?? 'Không gửi được mã xác thực');
+    }
+  }
+
+  Future<void> verifyLoginOtp(String code) async {
+    final idToken = await _auth.currentUser?.getIdToken();
+    final response = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/auth/verify-otp'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+      body: jsonEncode({'code': code}),
+    ).timeout(const Duration(seconds: 15));
+    final resData = jsonDecode(response.body);
+    if (resData['success'] != true) {
+      throw Exception(resData['message'] ?? 'Mã xác thực không đúng');
+    }
+  }
+
   Future<void> resetPassword(String email) async {
     await _auth.sendPasswordResetEmail(email: email);
   }

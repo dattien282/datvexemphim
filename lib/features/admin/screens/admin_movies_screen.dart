@@ -1,6 +1,10 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/constants.dart';
 import '../../../providers/movies_provider.dart';
 import 'admin_audit_log.dart';
 
@@ -51,6 +55,7 @@ class AdminMoviesScreen extends ConsumerWidget {
   }
 
   static void _showMovieDialog(BuildContext context, Movie? existing) {
+    final tmdbIdCtrl = TextEditingController();
     final titleCtrl = TextEditingController(text: existing?.title ?? '');
     final genreCtrl = TextEditingController(text: existing?.genre ?? '');
     final ratingCtrl = TextEditingController(text: existing?.rating ?? '');
@@ -61,7 +66,10 @@ class AdminMoviesScreen extends ConsumerWidget {
     final releaseDateCtrl = TextEditingController(text: existing?.releaseDate ?? '');
     final descCtrl = TextEditingController(text: existing?.description ?? '');
     final trailerCtrl = TextEditingController(text: existing?.trailerUrl ?? '');
+    final ageRatingCtrl = TextEditingController(text: existing?.ageRating ?? '');
+    final countryCtrl = TextEditingController(text: existing?.country ?? '');
     bool isShowingNow = existing?.isShowingNow ?? true;
+    bool importing = false;
 
     showDialog(
       context: context,
@@ -79,6 +87,89 @@ class AdminMoviesScreen extends ConsumerWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (existing == null) ...[
+                    // Nhập TMDB ID để tự động điền thông tin
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: _field(tmdbIdCtrl, 'Nhập mã TMDB (vd: 533535)', inputType: TextInputType.number),
+                        ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          height: 38,
+                          child: ElevatedButton(
+                            onPressed: importing
+                                ? null
+                                : () async {
+                                    final id = tmdbIdCtrl.text.trim();
+                                    if (id.isEmpty) return;
+                                    setState(() => importing = true);
+                                    try {
+                                      final user = FirebaseAuth.instance.currentUser;
+                                      if (user == null) throw 'Chưa đăng nhập';
+                                      final token = await user.getIdToken();
+                                      final uri = Uri.parse('${AppConfig.paymentBackendUrl}/api/movies/import-tmdb');
+                                      final response = await http.post(
+                                        uri,
+                                        headers: {
+                                          'Content-Type': 'application/json',
+                                          'Authorization': 'Bearer $token',
+                                        },
+                                        body: jsonEncode({'tmdbId': id}),
+                                      );
+                                      if (response.statusCode == 200) {
+                                        final resData = jsonDecode(response.body);
+                                        if (resData['success'] == true) {
+                                          final m = resData['data'];
+                                          titleCtrl.text = m['title'] ?? '';
+                                          genreCtrl.text = m['genre'] ?? '';
+                                          ratingCtrl.text = m['rating'] ?? '';
+                                          posterCtrl.text = m['posterUrl'] ?? '';
+                                          directorCtrl.text = m['director'] ?? '';
+                                          castCtrl.text = m['cast'] ?? '';
+                                          durationCtrl.text = m['duration'] ?? '';
+                                          releaseDateCtrl.text = m['releaseDate'] ?? '';
+                                          descCtrl.text = m['description'] ?? '';
+                                          countryCtrl.text = m['country'] ?? '';
+                                          ageRatingCtrl.text = m['ageRating'] ?? '';
+                                          trailerCtrl.text = m['trailerUrl'] ?? '';
+
+                                          if (ctx.mounted) {
+                                            ScaffoldMessenger.of(ctx).showSnackBar(
+                                              const SnackBar(content: Text('Tải dữ liệu TMDB thành công!'), backgroundColor: Colors.teal),
+                                            );
+                                          }
+                                        } else {
+                                          throw resData['message'] ?? 'Lỗi không xác định';
+                                        }
+                                      } else {
+                                        throw 'Lỗi kết nối Server (${response.statusCode})';
+                                      }
+                                    } catch (e) {
+                                      if (ctx.mounted) {
+                                        ScaffoldMessenger.of(ctx).showSnackBar(
+                                          SnackBar(content: Text('Lỗi tải dữ liệu: $e'), backgroundColor: Colors.redAccent),
+                                        );
+                                      }
+                                    } finally {
+                                      setState(() => importing = false);
+                                    }
+                                  },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                            ),
+                            child: importing
+                                ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                                : const Text('TẢI', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(color: Colors.white12, height: 20),
+                  ],
                   _field(titleCtrl, 'Tên phim *'),
                   _field(genreCtrl, 'Thể loại (vd: Hành Động, Kịch Tính)'),
                   _field(ratingCtrl, 'Rating (vd: 8.5)', inputType: TextInputType.number),
@@ -87,6 +178,8 @@ class AdminMoviesScreen extends ConsumerWidget {
                   _field(castCtrl, 'Diễn viên'),
                   _field(durationCtrl, 'Thời lượng (vd: 130 phút)'),
                   _field(releaseDateCtrl, 'Ngày khởi chiếu (vd: 10/02/2024)'),
+                  _field(ageRatingCtrl, 'Phân loại độ tuổi (P/K/T13/T16/T18, để trống nếu chưa phân loại)'),
+                  _field(countryCtrl, 'Quốc gia sản xuất (vd: Việt Nam)'),
                   _field(descCtrl, 'Nội dung phim', maxLines: 3),
                   _field(trailerCtrl, 'URL Trailer YouTube (vd: https://youtu.be/xxxx)'),
                   const SizedBox(height: 8),
@@ -95,7 +188,7 @@ class AdminMoviesScreen extends ConsumerWidget {
                       Switch(
                         value: isShowingNow,
                         onChanged: (v) => setState(() => isShowingNow = v),
-                        activeColor: Colors.amber,
+                        activeThumbColor: Colors.amber,
                       ),
                       Text(isShowingNow ? 'Đang chiếu' : 'Sắp chiếu',
                           style: const TextStyle(color: Colors.white70, fontSize: 13)),
@@ -126,6 +219,8 @@ class AdminMoviesScreen extends ConsumerWidget {
                   'description': descCtrl.text.trim(),
                   'isShowingNow': isShowingNow,
                   'trailerUrl': trailerCtrl.text.trim(),
+                  'ageRating': ageRatingCtrl.text.trim().toUpperCase(),
+                  'country': countryCtrl.text.trim(),
                 };
                 final col = FirebaseFirestore.instance.collection('movies');
                 if (existing == null) {
@@ -182,7 +277,7 @@ class _MovieTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF16161F),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.04)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
       ),
       child: Row(
         children: [
@@ -190,7 +285,7 @@ class _MovieTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: movie.posterUrl.isNotEmpty
                 ? Image.network(movie.posterUrl, width: 54, height: 76, fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _posterPlaceholder())
+                    errorBuilder: (_, _, _) => _posterPlaceholder())
                 : _posterPlaceholder(),
           ),
           const SizedBox(width: 14),
@@ -209,13 +304,13 @@ class _MovieTile extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
                         color: movie.isShowingNow
-                            ? Colors.green.withOpacity(0.15)
-                            : Colors.blue.withOpacity(0.15),
+                            ? Colors.green.withValues(alpha: 0.15)
+                            : Colors.blue.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: movie.isShowingNow
-                              ? Colors.green.withOpacity(0.4)
-                              : Colors.blue.withOpacity(0.4),
+                              ? Colors.green.withValues(alpha: 0.4)
+                              : Colors.blue.withValues(alpha: 0.4),
                         ),
                       ),
                       child: Text(
@@ -269,8 +364,6 @@ class _MovieTile extends StatelessWidget {
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
-              // Soft delete: giữ document lại (tránh vé/đánh giá cũ tham
-              // chiếu tới phim không còn tồn tại), chỉ ẩn khỏi mọi danh sách.
               await FirebaseFirestore.instance.collection('movies').doc(movie.id).update({
                 'isDeleted': true,
                 'deletedAt': Timestamp.now(),

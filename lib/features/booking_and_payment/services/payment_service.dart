@@ -36,8 +36,8 @@ class PaymentService {
 
     try {
       // Id do client sinh trước (thay vì .add()) để có thể ghi vé trong cùng 1
-      // transaction với việc đặt trước ghế - đảm bảo không thể có vé mà ghế
-      // đã bị người khác giành mất ngay trước đó trong tích tắc. Việc trừ
+      // transaction với việc "chốt" ghế đã giữ - đảm bảo không thể có vé mà
+      // ghế đã bị người khác giành mất ngay trước đó trong tích tắc. Việc trừ
       // tiền ví KHÔNG làm ở đây (xem lý do bên dưới), chỉ tạo vé PENDING.
       final walletTicketRef = FirebaseFirestore.instance.collection('tickets').doc();
       final showtimeId = movieData['showtimeId'] as String?;
@@ -55,16 +55,33 @@ class PaymentService {
       final String? roomName = movieData['roomName'] as String?;
       final String? duration = movieData['duration'] as String?;
 
-      final reserved = await FirebaseFirestore.instance.runTransaction((transaction) async {
-        final seatsAvailable = showtimeId != null
-            ? await areSeatsAvailable(transaction, showtimeId: showtimeId, seatIds: seatIds)
-            : true;
-        if (!seatsAvailable) return false;
+      // Giữ ghế atomic qua backend (Giai đoạn C - xem seat_reservation_service.dart
+      // holdSeats) NGAY TRƯỚC KHI tạo vé, thay cho areSeatsAvailable/reserveSeats
+      // cũ thao tác trên 1 document gộp showtime_seat_status. Suất chiếu chưa có
+      // ShowtimeSeat (tạo trước Giai đoạn C, chưa từng sinh subcollection 'seats')
+      // thì bỏ qua bước này, coi như không cần giữ ghế atomic (giữ nguyên hành vi
+      // cũ cho suất chiếu cũ, tránh chặn nhầm đặt vé hợp lệ).
+      String? holdToken;
+      if (showtimeId != null) {
+        final holdResult = await holdSeats(showtimeId: showtimeId, seatIds: seatIds);
+        if (!holdResult.success) {
+          return PaymentResult(success: false, message: holdResult.message ?? 'SEATS_ALREADY_BOOKED');
+        }
+        holdToken = holdResult.holdToken;
+      }
 
-        if (showtimeId != null) reserveSeats(transaction, showtimeId: showtimeId, seatIds: seatIds);
+      final reserved = await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final seatsValid = (showtimeId != null && holdToken != null)
+            ? await areHeldSeatsValid(transaction, showtimeId: showtimeId, seatIds: seatIds, holdToken: holdToken, userId: user.uid)
+            : true;
+        if (!seatsValid) return false;
+
+        if (showtimeId != null) {
+          bookHeldSeats(transaction, showtimeId: showtimeId, seatIds: seatIds, bookingId: walletTicketRef.id);
+        }
         transaction.set(walletTicketRef, {
           'userId': user.uid,
-          if (showtimeId != null) 'showtimeId': showtimeId,
+          'showtimeId': ?showtimeId,
           'movieTitle': movieTitle,
           'posterUrl': posterUrl,
           'seats': selectedSeats,
@@ -77,19 +94,22 @@ class PaymentService {
           'paymentMethod': 'wallet',
           'paymentStatus': 'PENDING',
           'theaterName': theaterName,
-          if (roomName != null) 'roomName': roomName,
-          if (duration != null) 'duration': duration,
+          'roomName': ?roomName,
+          'duration': ?duration,
           'showDate': showDate,
           'showTime': showTime,
           'showtime': '$theaterName | $showDate | $showTime',
           'email': userEmail,
-          if (verifiedCccd != null) 'verifiedCccd': verifiedCccd,
+          'verifiedCccd': ?verifiedCccd,
           'createdAt': Timestamp.now(),
         });
         return true;
       });
 
       if (!reserved) {
+        if (showtimeId != null && holdToken != null) {
+          await releaseHeldSeats(showtimeId: showtimeId, holdToken: holdToken);
+        }
         return PaymentResult(success: false, message: 'SEATS_ALREADY_BOOKED');
       }
 
@@ -174,18 +194,32 @@ class PaymentService {
       final seatIds = selectedSeats.map((s) => s.toString()).toList();
 
       final ticketRef = FirebaseFirestore.instance.collection('tickets').doc();
+
+      // Giữ ghế atomic qua backend trước - xem executeWalletPayment() ở trên
+      // để biết lý do (giống hệt, chỉ khác luồng thanh toán).
+      String? holdToken;
+      if (showtimeId != null) {
+        final holdResult = await holdSeats(showtimeId: showtimeId, seatIds: seatIds);
+        if (!holdResult.success) {
+          return PaymentResult(success: false, message: holdResult.message ?? 'SEATS_ALREADY_BOOKED');
+        }
+        holdToken = holdResult.holdToken;
+      }
+
       final reserved = await FirebaseFirestore.instance.runTransaction((transaction) async {
         // Chỉ đọc trước, chưa ghi gì.
-        final seatsAvailable = showtimeId != null
-            ? await areSeatsAvailable(transaction, showtimeId: showtimeId, seatIds: seatIds)
+        final seatsValid = (showtimeId != null && holdToken != null)
+            ? await areHeldSeatsValid(transaction, showtimeId: showtimeId, seatIds: seatIds, holdToken: holdToken, userId: user.uid)
             : true;
-        if (!seatsAvailable) return false;
+        if (!seatsValid) return false;
 
-        if (showtimeId != null) reserveSeats(transaction, showtimeId: showtimeId, seatIds: seatIds);
+        if (showtimeId != null) {
+          bookHeldSeats(transaction, showtimeId: showtimeId, seatIds: seatIds, bookingId: ticketRef.id);
+        }
         transaction.set(ticketRef, {
           'orderCode': orderCode,
           'userId': user.uid,
-          if (showtimeId != null) 'showtimeId': showtimeId,
+          'showtimeId': ?showtimeId,
           'movieTitle': movieTitle,
           'posterUrl': posterUrl,
           'seats': selectedSeats,
@@ -199,19 +233,22 @@ class PaymentService {
           'paymentMethod': 'bank',
           'paymentStatus': 'PENDING',
           'theaterName': theaterName,
-          if (roomName != null) 'roomName': roomName,
-          if (duration != null) 'duration': duration,
+          'roomName': ?roomName,
+          'duration': ?duration,
           'showDate': showDate,
           'showTime': showTime,
           'showtime': '$theaterName | $showDate | $showTime',
           'email': userEmail,
-          if (verifiedCccd != null) 'verifiedCccd': verifiedCccd,
+          'verifiedCccd': ?verifiedCccd,
           'createdAt': Timestamp.now(),
         });
         return true;
       });
 
       if (!reserved) {
+        if (showtimeId != null && holdToken != null) {
+          await releaseHeldSeats(showtimeId: showtimeId, holdToken: holdToken);
+        }
         return PaymentResult(success: false, message: 'SEATS_ALREADY_BOOKED');
       }
 
@@ -268,7 +305,11 @@ class PaymentService {
   /// SDK) thay vì tự gọi ticketRef.delete() từ client - firestore.rules chỉ
   /// cho phép isAdmin() xoá vé nên gọi trực tiếp luôn bị permission-denied,
   /// để lại vé rác và giữ ghế vĩnh viễn. Backend xoá vé + nhả ghế atomic
-  /// trong 1 transaction (xem /discard-pending-ticket ở server.js).
+  /// trong 1 transaction (xem /discard-pending-ticket ở server.js) - kể cả
+  /// ghế đã chuyển BOOKED (Giai đoạn C, gắn với vé PENDING này) chứ không chỉ
+  /// còn HOLDING, nên đây cũng là cách đúng để huỷ khi khách bỏ ngang màn
+  /// thanh toán PayOS (xem payment_screen.dart _cancelPendingTicketIfAny) -
+  /// không dùng releaseHeldSeats (chỉ áp dụng cho ghế còn HOLDING, chưa có vé).
   Future<void> _discardPendingTicket(String? idToken, String ticketId) async {
     try {
       await http.post(
@@ -283,5 +324,13 @@ class PaymentService {
       // Best-effort: nếu rollback lỗi, vé PENDING sẽ tự hết hạn/được dọn dẹp
       // sau; không nên làm lộ thêm lỗi thứ hai che mất lỗi thanh toán gốc.
     }
+  }
+
+  /// Bản public của [_discardPendingTicket] - dùng khi khách chủ động bỏ
+  /// ngang màn thanh toán (thoát màn hình, bấm "Huỷ giao dịch", hết giờ đếm
+  /// ngược) chứ không phải khi 1 bước thanh toán nội bộ thất bại.
+  Future<void> discardPendingTicket(String ticketId) async {
+    final idToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+    await _discardPendingTicket(idToken, ticketId);
   }
 }

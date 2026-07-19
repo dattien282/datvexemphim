@@ -325,6 +325,14 @@ service cloud.firestore {
       allow write: if isTheaterManager() || isAdmin();
     }
 
+    // 'attendance_logs' (Điểm danh ca làm)
+    match /attendance_logs/{logId} {
+      allow read: if isStaff() || isTheaterManager() || isAdmin();
+      allow create: if isStaff() || isTheaterManager() || isAdmin();
+      allow update: if isStaff() || isTheaterManager() || isAdmin();
+      allow delete: if isTheaterManager() || isAdmin();
+    }
+
     // 'admin_audit_log' (Nhật ký hành động admin)
     match /admin_audit_log/{document=**} {
       allow read: if isAdmin();

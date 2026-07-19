@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 import '../../../core/constants.dart';
 import '../../../providers/movies_provider.dart';
+import '../../../models/movie.dart';
 import 'admin_audit_log.dart';
 
 class AdminMoviesScreen extends ConsumerWidget {
@@ -16,24 +17,40 @@ class AdminMoviesScreen extends ConsumerWidget {
     final moviesAsync = ref.watch(moviesProvider);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF000000),
+      backgroundColor: const Color(0xFF09090F),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0F0F14),
         elevation: 0,
         centerTitle: true,
-        title: const Text('QUẢN LÝ PHIM',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
+        title: const Text(
+          'QUẢN LÝ PHIM',
+          style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 1),
+        ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_rounded, color: Colors.amber, size: 24),
-            onPressed: () => _showMovieDialog(context, null),
-            tooltip: 'Thêm phim mới',
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: IconButton(
+              icon: const Icon(Icons.add_rounded, color: Colors.amber, size: 22),
+              onPressed: () => _showMovieDialog(context, null),
+              tooltip: 'Thêm phim mới',
+            ),
           ),
         ],
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(
+            color: Colors.white.withValues(alpha: 0.05),
+            height: 1,
+          ),
+        ),
       ),
       body: moviesAsync.when(
         loading: () => const Center(child: CircularProgressIndicator(color: Colors.amber)),
@@ -75,14 +92,17 @@ class AdminMoviesScreen extends ConsumerWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) => AlertDialog(
-          backgroundColor: const Color(0xFF16161F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: const Color(0xFF0F0F14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
           title: Text(
             existing == null ? 'THÊM PHIM MỚI' : 'CHỈNH SỬA PHIM',
             style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
           ),
           content: SizedBox(
-            width: double.maxFinite,
+            width: MediaQuery.of(context).size.width * 0.9,
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -97,7 +117,7 @@ class AdminMoviesScreen extends ConsumerWidget {
                         ),
                         const SizedBox(width: 8),
                         SizedBox(
-                          height: 38,
+                          height: 42,
                           child: ElevatedButton(
                             onPressed: importing
                                 ? null
@@ -158,8 +178,8 @@ class AdminMoviesScreen extends ConsumerWidget {
                                   },
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.amber,
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                              padding: const EdgeInsets.symmetric(horizontal: 12),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
                             ),
                             child: importing
                                 ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
@@ -168,7 +188,7 @@ class AdminMoviesScreen extends ConsumerWidget {
                         ),
                       ],
                     ),
-                    const Divider(color: Colors.white12, height: 20),
+                    const Divider(color: Colors.white10, height: 24),
                   ],
                   _field(titleCtrl, 'Tên phim *'),
                   _field(genreCtrl, 'Thể loại (vd: Hành Động, Kịch Tính)'),
@@ -188,7 +208,8 @@ class AdminMoviesScreen extends ConsumerWidget {
                       Switch(
                         value: isShowingNow,
                         onChanged: (v) => setState(() => isShowingNow = v),
-                        activeThumbColor: Colors.amber,
+                        activeTrackColor: Colors.amber.withValues(alpha: 0.3),
+                        activeColor: Colors.amber,
                       ),
                       Text(isShowingNow ? 'Đang chiếu' : 'Sắp chiếu',
                           style: const TextStyle(color: Colors.white70, fontSize: 13)),
@@ -201,7 +222,7 @@ class AdminMoviesScreen extends ConsumerWidget {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('HỦY', style: TextStyle(color: Colors.grey)),
+              child: const Text('HỦY', style: TextStyle(color: Colors.white38)),
             ),
             ElevatedButton(
               onPressed: () async {
@@ -231,9 +252,12 @@ class AdminMoviesScreen extends ConsumerWidget {
                   await logAdminAction(action: 'update_movie', targetCollection: 'movies', targetId: existing.id, before: existing.toMap(), after: data);
                 }
               },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
               child: Text(
-                existing == null ? 'THÊM' : 'CẬP NHẬT',
+                existing == null ? 'THÊM PHIM' : 'LƯU',
                 style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
               ),
             ),
@@ -246,7 +270,7 @@ class AdminMoviesScreen extends ConsumerWidget {
   static Widget _field(TextEditingController ctrl, String hint,
       {TextInputType inputType = TextInputType.text, int maxLines = 1}) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: ctrl,
         keyboardType: inputType,
@@ -254,10 +278,21 @@ class AdminMoviesScreen extends ConsumerWidget {
         style: const TextStyle(color: Colors.white, fontSize: 13),
         decoration: InputDecoration(
           hintText: hint,
-          hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
+          hintStyle: const TextStyle(color: Colors.white24, fontSize: 11),
           filled: true,
-          fillColor: const Color(0xFF1E1E2A),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+          fillColor: const Color(0xFF161622),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14), 
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14), 
+            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(14), 
+            borderSide: const BorderSide(color: Colors.amber, width: 1.2),
+          ),
           contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         ),
       ),
@@ -275,16 +310,16 @@ class _MovieTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF16161F),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
+        color: const Color(0xFF161622),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
       ),
       child: Row(
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(12),
             child: movie.posterUrl.isNotEmpty
-                ? Image.network(movie.posterUrl, width: 54, height: 76, fit: BoxFit.cover,
+                ? Image.network(movie.posterUrl, width: 56, height: 78, fit: BoxFit.cover,
                     errorBuilder: (_, _, _) => _posterPlaceholder())
                 : _posterPlaceholder(),
           ),
@@ -293,24 +328,28 @@ class _MovieTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(movie.title,
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+                Text(
+                  movie.title,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 const SizedBox(height: 4),
                 Text(movie.genre, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                const SizedBox(height: 6),
+                const SizedBox(height: 8),
                 Row(
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
                         color: movie.isShowingNow
-                            ? Colors.green.withValues(alpha: 0.15)
-                            : Colors.blue.withValues(alpha: 0.15),
+                            ? Colors.green.withValues(alpha: 0.1)
+                            : Colors.blue.withValues(alpha: 0.1),
                         borderRadius: BorderRadius.circular(8),
                         border: Border.all(
                           color: movie.isShowingNow
-                              ? Colors.green.withValues(alpha: 0.4)
-                              : Colors.blue.withValues(alpha: 0.4),
+                              ? Colors.greenAccent.withValues(alpha: 0.3)
+                              : Colors.lightBlueAccent.withValues(alpha: 0.3),
                         ),
                       ),
                       child: Text(
@@ -322,26 +361,40 @@ class _MovieTile extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    const Icon(Icons.star_rounded, color: Colors.amber, size: 13),
-                    const SizedBox(width: 2),
-                    Text(movie.rating, style: const TextStyle(color: Colors.amber, fontSize: 11)),
+                    const SizedBox(width: 10),
+                    const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
+                    const SizedBox(width: 3),
+                    Text(movie.rating, style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ],
             ),
           ),
+          const SizedBox(width: 8),
           Column(
             children: [
-              IconButton(
-                icon: const Icon(Icons.edit_rounded, color: Colors.amber, size: 20),
-                onPressed: () => AdminMoviesScreen._showMovieDialog(context, movie),
-                tooltip: 'Chỉnh sửa',
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.amber.withValues(alpha: 0.05),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.edit_rounded, color: Colors.amber, size: 18),
+                  onPressed: () => AdminMoviesScreen._showMovieDialog(context, movie),
+                  tooltip: 'Chỉnh sửa',
+                ),
               ),
-              IconButton(
-                icon: const Icon(Icons.delete_rounded, color: Colors.redAccent, size: 20),
-                onPressed: () => _confirmDelete(context),
-                tooltip: 'Xóa',
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withValues(alpha: 0.05),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.delete_rounded, color: Colors.redAccent, size: 18),
+                  onPressed: () => _confirmDelete(context),
+                  tooltip: 'Xóa',
+                ),
               ),
             ],
           ),
@@ -354,13 +407,16 @@ class _MovieTile extends StatelessWidget {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF16161F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('XÓA PHIM', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        content: Text('Bạn có chắc muốn xóa phim "${movie.title}"? Vé/đánh giá cũ vẫn được giữ lại, phim chỉ bị ẩn khỏi ứng dụng.',
-            style: const TextStyle(color: Colors.white70)),
+        backgroundColor: const Color(0xFF0F0F14),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        title: const Text('XÓA PHIM', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 15)),
+        content: Text('Bạn có chắc muốn xóa phim "${movie.title}"? Vé và đánh giá cũ vẫn được giữ lại, phim chỉ bị ẩn khỏi ứng dụng.',
+            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5)),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('HỦY', style: TextStyle(color: Colors.white38))),
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(ctx);
@@ -370,8 +426,11 @@ class _MovieTile extends StatelessWidget {
               });
               await logAdminAction(action: 'delete_movie', targetCollection: 'movies', targetId: movie.id, before: movie.toMap());
             },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            child: const Text('XÓA', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            child: const Text('XÓA PHIM', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -380,9 +439,9 @@ class _MovieTile extends StatelessWidget {
 
   Widget _posterPlaceholder() {
     return Container(
-      width: 54,
-      height: 76,
-      color: const Color(0xFF1E1E2A),
+      width: 56,
+      height: 78,
+      color: const Color(0xFF161622),
       child: const Icon(Icons.movie_rounded, color: Colors.white24, size: 24),
     );
   }

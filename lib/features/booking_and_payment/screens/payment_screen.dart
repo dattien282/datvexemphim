@@ -390,7 +390,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 child: ElevatedButton(
                   onPressed: () => Navigator.pop(context),
                   style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
-                  child: const Text('ĐẠ ĐỒNG Ý', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                  child: const Text('ĐỒNG Ý', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 ),
               )
             ],

@@ -350,3 +350,116 @@ Future<void> migrateRoomFormatsToFirestore() async {
 
   print('Seeded ${kDefaultRoomFormatSpecs.length} room formats vào Firestore.');
 }
+
+/// Dữ liệu demo cho 3 collection hoàn toàn trống nếu chưa ai từng dùng thật:
+/// 'incidents' (Báo cáo Sự cố - staff gửi/manager xem), 'shifts' (Smart
+/// Roster - manager phân/staff xem), 'attendance_logs' (Điểm danh ca làm).
+/// Trước đây 3 màn hình này luôn hiện "chưa có dữ liệu" dù UI đã xây xong,
+/// khiến demo trông trống trải dù tính năng đã hoạt động đầy đủ.
+///
+/// Dùng ĐÚNG tài khoản staff/theater_manager thật đã có sẵn trong Firestore
+/// (gán theo assignedTheater) thay vì bịa uid giả - để tên hiện đúng thay vì
+/// "Unknown" (Smart Roster tra `users/{uid}` để hiện tên), và để tài khoản
+/// staff thật đăng nhập vào đúng thấy được ca/lịch sử của chính mình (Staff
+/// dashboard lọc theo uid đang đăng nhập). Idempotent theo từng rạp: bỏ qua
+/// nếu rạp đó đã có sẵn incidents/shift hôm nay, không tạo trùng mỗi lần bấm
+/// lại; và bỏ qua hẳn rạp nào chưa có tài khoản staff nào (không seed
+/// shifts/attendance dở dang chỉ để trống staffIds).
+Future<void> seedStaffManagerDemoData() async {
+  final firestore = FirebaseFirestore.instance;
+  print('Seeding demo data cho Staff/Theater Manager...');
+
+  final theaterSnap = await firestore.collection('theaters').get();
+  final now = DateTime.now();
+  String pad2(int n) => n.toString().padLeft(2, '0');
+  final todayStr = '${now.year}-${pad2(now.month)}-${pad2(now.day)}';
+
+  const incidentSamples = [
+    {'type': 'Hết bắp nước', 'description': 'Quầy bắp nước hết vị phô mai, cần nhập thêm cho suất chiều.', 'status': 'pending', 'hoursAgo': 1},
+    {'type': 'Hỏng ghế', 'description': 'Ghế C5 phòng 1 bị lỏng tay vịn, cần thợ kiểm tra trước suất tối.', 'status': 'resolved', 'hoursAgo': 26},
+    {'type': 'Vệ sinh', 'description': 'Sảnh chờ suất 19h cần dọn thêm rác sau giờ cao điểm cuối tuần.', 'status': 'pending', 'hoursAgo': 4},
+  ];
+
+  int theatersSeeded = 0;
+  for (final theaterDoc in theaterSnap.docs) {
+    final theaterName = theaterDoc.data()['name'] as String?;
+    if (theaterName == null) continue;
+
+    final staffSnap = await firestore
+        .collection('users')
+        .where('role', whereIn: ['staff', 'theater_manager'])
+        .where('assignedTheater', isEqualTo: theaterName)
+        .get();
+    if (staffSnap.docs.isEmpty) continue; // Không có ai để gán - bỏ qua rạp này.
+    final staffOnly = staffSnap.docs.where((d) => d.data()['role'] == 'staff').toList();
+    final assignee = staffOnly.isNotEmpty ? staffOnly.first : staffSnap.docs.first;
+    final assigneeEmail = assignee.data()['email'] as String? ?? 'staff@stellacinema.vn';
+
+    // 1. Incidents demo.
+    final existingIncidents = await firestore.collection('incidents').where('theater', isEqualTo: theaterName).limit(1).get();
+    if (existingIncidents.docs.isEmpty) {
+      final batch = firestore.batch();
+      for (final sample in incidentSamples) {
+        final ref = firestore.collection('incidents').doc();
+        final createdAt = now.subtract(Duration(hours: sample['hoursAgo'] as int));
+        batch.set(ref, {
+          'theater': theaterName,
+          'reporterEmail': assigneeEmail,
+          'type': sample['type'],
+          'description': sample['description'],
+          'status': sample['status'],
+          'createdAt': Timestamp.fromDate(createdAt),
+          if (sample['status'] == 'resolved') 'resolvedAt': Timestamp.fromDate(now.subtract(const Duration(hours: 20))),
+        });
+      }
+      await batch.commit();
+    }
+
+    // 2. Shifts demo (hôm nay, đủ 3 ca, gán tất cả staff có sẵn của rạp vào ca sáng).
+    final existingShifts = await firestore
+        .collection('shifts')
+        .where('theater', isEqualTo: theaterName)
+        .where('date', isEqualTo: todayStr)
+        .limit(1)
+        .get();
+    if (existingShifts.docs.isEmpty) {
+      final morningStaffIds = staffOnly.map((d) => d.id).toList();
+      final batch = firestore.batch();
+      for (final shiftType in ['morning', 'afternoon', 'night']) {
+        final ref = firestore.collection('shifts').doc();
+        batch.set(ref, {
+          'theater': theaterName,
+          'date': todayStr,
+          'shiftType': shiftType,
+          'staffIds': shiftType == 'morning' ? morningStaffIds : <String>[],
+        });
+      }
+      await batch.commit();
+    }
+
+    // 3. Attendance demo (1 nhân viên đã vào ca sáng hôm nay, chưa ra ca).
+    final existingAttendance = await firestore
+        .collection('attendance_logs')
+        .where('theater', isEqualTo: theaterName)
+        .where('date', isEqualTo: todayStr)
+        .limit(1)
+        .get();
+    if (existingAttendance.docs.isEmpty && staffOnly.isNotEmpty) {
+      final staffDoc = staffOnly.first;
+      await firestore.collection('attendance_logs').add({
+        'uid': staffDoc.id,
+        'displayName': staffDoc.data()['displayName'] ?? staffDoc.data()['email'] ?? 'Nhân viên',
+        'email': staffDoc.data()['email'] ?? '',
+        'theater': theaterName,
+        'date': todayStr,
+        'checkInTime': Timestamp.fromDate(DateTime(now.year, now.month, now.day, 8, 2)),
+        'checkOutTime': null,
+        'status': 'check_in',
+      });
+    }
+
+    theatersSeeded++;
+  }
+
+  print('Đã seed demo data (sự cố/ca làm/điểm danh) cho $theatersSeeded rạp có sẵn tài khoản staff.');
+}

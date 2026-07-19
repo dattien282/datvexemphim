@@ -19,38 +19,53 @@ class _AdminUsersScreenState extends ConsumerState<AdminUsersScreen> {
   Widget build(BuildContext context) {
     final theaterNames = ref.watch(theaterNamesProvider);
     return Scaffold(
-      backgroundColor: const Color(0xFF000000),
+      backgroundColor: const Color(0xFF09090F),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0F0F14),
         elevation: 0,
         centerTitle: true,
         title: const Text(
-          'QUẢN LÝ NGƯỜI DÙNG',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+          'QUẢN LÝ THÀNH VIÊN',
+          style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 15, letterSpacing: 1),
         ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
           onPressed: () => Navigator.pop(context),
+        ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(
+            color: Colors.white.withValues(alpha: 0.05),
+            height: 1,
+          ),
         ),
       ),
       body: Column(
         children: [
           // ── Search bar ──────────────────────────────────────────────────────
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
             child: TextField(
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Tìm theo email hoặc tên...',
+                hintText: 'Tìm kiếm theo tên hoặc email...',
                 hintStyle: const TextStyle(color: Colors.white38),
                 prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 20),
                 filled: true,
-                fillColor: const Color(0xFF1E1E2A),
+                fillColor: const Color(0xFF161622),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
                 ),
-                contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Colors.amber, width: 1.2),
+                ),
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
               ),
               onChanged: (v) => setState(() => _search = v.toLowerCase()),
             ),
@@ -134,64 +149,76 @@ class _UserCard extends StatelessWidget {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDlg) => AlertDialog(
-          backgroundColor: const Color(0xFF16161F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          backgroundColor: const Color(0xFF0F0F14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+          ),
           title: const Text(
-            'PHÂN QUYỀN NGƯỜI DÙNG',
+            'PHÂN QUYỀN THÀNH VIÊN',
             style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
           ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                data['email'] ?? '',
-                style: const TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-              const SizedBox(height: 16),
-              const Text('Chọn vai trò:', style: TextStyle(color: Colors.white70, fontSize: 13)),
-              const SizedBox(height: 8),
-              ...UserRole.values.map((role) => RadioListTile<UserRole>(
-                value: role,
-                groupValue: selected,
-                activeColor: _roleColor(role),
-                dense: true,
-                contentPadding: EdgeInsets.zero,
-                title: Row(
-                  children: [
-                    Icon(_roleIcon(role), color: _roleColor(role), size: 16),
-                    const SizedBox(width: 8),
-                    Text(role.label, style: TextStyle(color: _roleColor(role), fontSize: 13)),
-                  ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  data['email'] ?? '',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
                 ),
-                onChanged: (v) => setDlg(() => selected = v!),
-              )),
-              if (selected == UserRole.staff || selected == UserRole.theaterManager) ...[
-                const SizedBox(height: 12),
-                const Text('Rạp phụ trách:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                const SizedBox(height: 16),
+                const Text('Chọn vai trò:', style: TextStyle(color: Colors.white70, fontSize: 13)),
                 const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  isExpanded: true,
-                  initialValue: selectedTheater,
-                  dropdownColor: const Color(0xFF1E1E2A),
-                  decoration: InputDecoration(
-                    filled: true,
-                    fillColor: const Color(0xFF1E1E2A),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ...UserRole.values.map((role) => RadioListTile<UserRole>(
+                  value: role,
+                  groupValue: selected,
+                  activeColor: _roleColor(role),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  title: Row(
+                    children: [
+                      Icon(_roleIcon(role), color: _roleColor(role), size: 16),
+                      const SizedBox(width: 8),
+                      Text(role.label, style: TextStyle(color: _roleColor(role), fontSize: 13)),
+                    ],
                   ),
-                  hint: const Text('Chọn rạp', style: TextStyle(color: Colors.white38, fontSize: 12)),
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  items: theaterNames.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-                  onChanged: (v) => setDlg(() => selectedTheater = v),
-                ),
+                  onChanged: (v) => setDlg(() => selected = v!),
+                )),
+                if (selected == UserRole.staff || selected == UserRole.theaterManager) ...[
+                  const SizedBox(height: 12),
+                  const Text('Rạp phụ trách:', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    isExpanded: true,
+                    initialValue: selectedTheater,
+                    dropdownColor: const Color(0xFF161622),
+                    decoration: InputDecoration(
+                      filled: true,
+                      fillColor: const Color(0xFF161622),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12), 
+                        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12), 
+                        borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                    hint: const Text('Chọn rạp', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    items: theaterNames.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                    onChanged: (v) => setDlg(() => selectedTheater = v),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('HỦY', style: TextStyle(color: Colors.grey)),
+              child: const Text('HỦY', style: TextStyle(color: Colors.white38)),
             ),
             ElevatedButton(
               onPressed: () async {
@@ -199,7 +226,7 @@ class _UserCard extends StatelessWidget {
                 final updates = <String, dynamic>{
                   'role': selected.firestoreValue,
                   'isAdmin': selected == UserRole.admin,
-                  'assignedTheater': ?selectedTheater,
+                  'assignedTheater': selectedTheater,
                   if (selected == UserRole.user || selected == UserRole.admin)
                     'assignedTheater': FieldValue.delete(),
                 };
@@ -215,7 +242,10 @@ class _UserCard extends StatelessWidget {
                   after: {'role': selected.firestoreValue, 'assignedTheater': selectedTheater},
                 );
               },
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.amber,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
               child: const Text('LƯU', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
             ),
           ],
@@ -240,17 +270,24 @@ class _UserCard extends StatelessWidget {
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF16161F),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withValues(alpha: 0.12)),
+        color: const Color(0xFF161622),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         children: [
           CircleAvatar(
             radius: 22,
-            backgroundColor: color.withValues(alpha: 0.15),
+            backgroundColor: color.withValues(alpha: 0.12),
             child: Text(initials, style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 13)),
           ),
           const SizedBox(width: 14),
@@ -267,13 +304,13 @@ class _UserCard extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: color.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: color.withValues(alpha: 0.3)),
+                        color: color.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: color.withValues(alpha: 0.2)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -286,23 +323,56 @@ class _UserCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                if (displayName.isNotEmpty)
-                  Text(email, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                if (phone.isNotEmpty)
-                  Text(phone, style: const TextStyle(color: Colors.white38, fontSize: 11)),
-                if (assignedTheater != null)
-                  Text(assignedTheater, style: const TextStyle(color: Colors.tealAccent, fontSize: 10)),
-                const SizedBox(height: 2),
+                if (displayName.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    email, 
+                    style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+                if (phone.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    phone, 
+                    style: const TextStyle(color: Colors.white38, fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+                if (assignedTheater != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.business_rounded, color: Colors.tealAccent, size: 12),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          assignedTheater, 
+                          style: const TextStyle(color: Colors.tealAccent, fontSize: 10, fontWeight: FontWeight.w500),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 6),
                 Text(
                   'Ví: ${_fmt(wallet)} đ',
-                  style: const TextStyle(color: Colors.amber, fontSize: 11),
+                  style: const TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded, color: Colors.white38, size: 20),
-            color: const Color(0xFF1E1E2A),
+            color: const Color(0xFF161622),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+            ),
             onSelected: (value) {
               if (value == 'role') _showRoleDialog(context, data, role);
             },

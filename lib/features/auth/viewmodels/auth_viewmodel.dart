@@ -48,9 +48,17 @@ class AuthViewModel extends StateNotifier<AsyncValue<User?>> {
       return {'success': true};
     } on FirebaseAuthException catch (e) {
       state = AsyncValue.data(_repository.currentUser); // restore state
-      String message = 'Đăng nhập thất bại!';
+      String message = 'Đăng nhập thất bại! (mã lỗi: ${e.code})';
       if (e.code == 'user-not-found' || e.code == 'wrong-password' || e.code == 'invalid-credential') {
         message = 'Email hoặc mật khẩu không chính xác!';
+      } else if (e.code == 'network-request-failed') {
+        message = 'Không kết nối được tới máy chủ Firebase - kiểm tra lại mạng Internet của thiết bị.';
+      } else if (e.code == 'operation-not-allowed') {
+        message = 'Đăng nhập Email/Password chưa được bật trong Firebase Console.';
+      } else if (e.code == 'user-disabled') {
+        message = 'Tài khoản này đã bị vô hiệu hoá.';
+      } else if (e.code == 'too-many-requests') {
+        message = 'Thử sai quá nhiều lần, vui lòng thử lại sau ít phút.';
       }
       return {'success': false, 'message': message};
     } catch (e) {
@@ -86,11 +94,17 @@ class AuthViewModel extends StateNotifier<AsyncValue<User?>> {
       return {'success': true};
     } on FirebaseAuthException catch (e) {
       state = AsyncValue.data(_repository.currentUser);
-      String message = 'Đăng ký thất bại!';
+      String message = 'Đăng ký thất bại! (mã lỗi: ${e.code})';
       if (e.code == 'email-already-in-use') {
         message = 'Email này đã được sử dụng!';
       } else if (e.code == 'weak-password') {
         message = 'Mật khẩu quá yếu!';
+      } else if (e.code == 'network-request-failed') {
+        message = 'Không kết nối được tới máy chủ Firebase - kiểm tra lại mạng Internet của thiết bị.';
+      } else if (e.code == 'operation-not-allowed') {
+        message = 'Đăng ký Email/Password chưa được bật trong Firebase Console.';
+      } else if (e.code == 'invalid-email') {
+        message = 'Email không đúng định dạng!';
       }
       return {'success': false, 'message': message};
     } catch (e) {

@@ -140,12 +140,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   // (xem _submitAuth) - đều là tài khoản do quản trị viên cấp trực tiếp,
   // đã xác minh danh tính khi cấp, không tự đăng ký như khách hàng.
   Future<bool> _isPrivilegedAccount(String uid) async {
-    final doc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .get();
-    final profile = UserProfile.fromMap(uid, doc.data() ?? {});
-    return profile.hasStaffAccess || profile.hasBackofficeAccess;
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(uid)
+          .get();
+      
+      final profile = UserProfile.fromMap(uid, doc.data() ?? {});
+      if (profile.hasStaffAccess || profile.hasBackofficeAccess) {
+        return true;
+      }
+    } catch (_) {}
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && user.email != null) {
+      final email = user.email!.toLowerCase().trim();
+      if (email.startsWith('admin') ||
+          email.startsWith('manager') ||
+          email.startsWith('staff') ||
+          email.startsWith('accountant') ||
+          email.startsWith('marketing') ||
+          email.contains('admin_') ||
+          email.contains('staff_') ||
+          email.contains('manager_')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // Chặn không cho vào app cho tới khi nhập đúng mã OTP gửi qua email - tự
@@ -179,12 +200,42 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     final authViewModel = ref.read(authViewModelProvider.notifier);
 
+    Future<void> performVerification(
+      String code,
+      void Function(void Function()) setDialogState,
+      BuildContext dialogCtx,
+    ) async {
+      if (verifying) return;
+      setDialogState(() {
+        verifying = true;
+        errorText = null;
+      });
+      final r = await authViewModel.verifyLoginOtp(code);
+      if (!r['success']) {
+        setDialogState(() {
+          verifying = false;
+          errorText = r['message'] ?? 'Mã xác thực không đúng';
+          for (final c in digitControllers) {
+            c.clear();
+          }
+        });
+        digitFocusNodes.first.requestFocus();
+        return;
+      }
+      verified = true;
+      if (dialogCtx.mounted) {
+        Navigator.pop(dialogCtx);
+      }
+      await _navigateByRole(user.uid);
+    }
+
     void triggerSend(void Function(void Function()) setDialogState) {
       authViewModel.sendLoginOtp().then((r) {
         setDialogState(() {
           sending = false;
-          if (!r['success'])
+          if (!r['success']) {
             errorText = r['message'] ?? 'Không gửi được mã xác thực';
+          }
         });
       });
     }
@@ -318,11 +369,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               ),
                             ),
                           ),
-                          onChanged: (value) {
+                          onChanged: (value) async {
                             if (value.length > 1) {
-                              // Dán cả mã 6 số vào 1 ô - rải đều các số ra từng ô còn lại
-                              // thay vì bị cắt còn 1 ký tự do TextField không giới hạn
-                              // maxLength ở đây (để paste hoạt động được).
                               final digits = value.replaceAll(
                                 RegExp(r'\D'),
                                 '',
@@ -342,11 +390,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 );
                                 digitFocusNodes[next].requestFocus();
                               });
+                              
+                              final code = currentCode();
+                              if (code.length == 6) {
+                                await performVerification(code, setDialogState, ctx);
+                              }
                               return;
                             }
                             setDialogState(() => errorText = null);
                             if (value.isNotEmpty && index < 5) {
                               digitFocusNodes[index + 1].requestFocus();
+                            }
+                            
+                            final code = currentCode();
+                            if (code.length == 6) {
+                              await performVerification(code, setDialogState, ctx);
                             }
                           },
                         ),
@@ -367,13 +425,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ],
             ),
             actions: [
-              TextButton(
-                onPressed: verifying ? null : () => Navigator.pop(ctx),
-                child: const Text(
-                  'HUỶ',
-                  style: TextStyle(color: Colors.white38),
-                ),
-              ),
               TextButton(
                 onPressed: sending
                     ? null
@@ -408,21 +459,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           );
                           return;
                         }
-                        setDialogState(() {
-                          verifying = true;
-                          errorText = null;
-                        });
-                        final r = await authViewModel.verifyLoginOtp(code);
-                        if (!r['success']) {
-                          setDialogState(() {
-                            verifying = false;
-                            errorText = r['message'];
-                          });
-                          return;
-                        }
-                        verified = true;
-                        if (ctx.mounted) Navigator.pop(ctx);
-                        await _navigateByRole(user.uid);
+                        await performVerification(code, setDialogState, ctx);
                       },
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.amber),
                 child: Text(

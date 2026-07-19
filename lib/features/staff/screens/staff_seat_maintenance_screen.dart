@@ -3,11 +3,6 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/room_layout.dart';
 import '../../theater_manager/widgets/seat_grid_widget.dart';
 
-/// Đánh dấu ghế hỏng/bảo trì tạm thời cho phòng chiếu tại rạp mình phụ
-/// trách - trước đây không có cách nào staff báo ghế hỏng, khách vẫn có thể
-/// chọn phải ghế gãy/không dùng được. Ghế đánh dấu hỏng ở đây sẽ hiện "Đã
-/// bán" (không chọn được) trong seat_booking_screen.dart và
-/// staff_walkin_sale_screen.dart cho tới khi được gỡ đánh dấu.
 class StaffSeatMaintenanceScreen extends StatefulWidget {
   final String? theater;
   const StaffSeatMaintenanceScreen({super.key, required this.theater});
@@ -17,79 +12,115 @@ class StaffSeatMaintenanceScreen extends StatefulWidget {
 }
 
 class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen> {
-  QueryDocumentSnapshot? _selectedRoom;
+  String? _selectedRoomId;
   MaintenanceTarget _target = MaintenanceTarget.broken;
 
   @override
   Widget build(BuildContext context) {
     final theater = widget.theater;
     return Scaffold(
-      backgroundColor: const Color(0xFF000000),
+      backgroundColor: const Color(0xFF09090F),
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16161F),
+        backgroundColor: const Color(0xFF0F0F14),
         elevation: 0,
         centerTitle: true,
-        title: const Text('GHẾ HỎNG / XE LĂN', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+        title: const Text(
+          'GHẾ HỎNG / XE LĂN', 
+          style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14, letterSpacing: 1),
+        ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
           onPressed: () => Navigator.pop(context),
         ),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(1),
+          child: Container(
+            color: Colors.white.withValues(alpha: 0.05),
+            height: 1,
+          ),
+        ),
       ),
       body: theater == null
           ? const Center(child: Text('Tài khoản chưa được gán rạp.', style: TextStyle(color: Colors.white38)))
-          : Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream: FirebaseFirestore.instance.collection('rooms').where('theaterName', isEqualTo: theater).snapshots(),
-                    builder: (context, snap) {
-                      final docs = snap.data?.docs ?? [];
-                      if (docs.isEmpty) {
-                        return const Text('Rạp này chưa cấu hình phòng chiếu nào.', style: TextStyle(color: Colors.white38, fontSize: 12));
-                      }
-                      final current = _selectedRoom != null && docs.any((d) => d.id == _selectedRoom!.id) ? _selectedRoom : null;
-                      return DropdownButtonFormField<QueryDocumentSnapshot>(
-                        initialValue: current,
-                        dropdownColor: const Color(0xFF1E1E2A),
+          : StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('rooms').where('theaterName', isEqualTo: theater).snapshots(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator(color: Colors.amber));
+                }
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Center(
+                    child: Text('Rạp này chưa cấu hình phòng chiếu nào.', style: TextStyle(color: Colors.white38, fontSize: 12)),
+                  );
+                }
+                
+                final hasSelected = docs.any((d) => d.id == _selectedRoomId);
+                final currentId = hasSelected ? _selectedRoomId : null;
+                final selectedDoc = hasSelected 
+                    ? docs.firstWhere((d) => d.id == _selectedRoomId)
+                    : null;
+
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: DropdownButtonFormField<String>(
+                        initialValue: currentId,
+                        dropdownColor: const Color(0xFF161622),
                         isExpanded: true,
                         decoration: InputDecoration(
                           filled: true,
-                          fillColor: const Color(0xFF16161F),
-                          prefixIcon: const Icon(Icons.weekend_rounded, color: Colors.orangeAccent, size: 18),
-                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                          fillColor: const Color(0xFF161622),
+                          prefixIcon: const Icon(Icons.weekend_rounded, color: Colors.amber, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14), 
+                            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14), 
+                            borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14), 
+                            borderSide: const BorderSide(color: Colors.amber, width: 1.2),
+                          ),
                           contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
                         ),
                         hint: const Text('Chọn phòng chiếu', style: TextStyle(color: Colors.white38, fontSize: 12)),
                         style: const TextStyle(color: Colors.white, fontSize: 12),
                         items: docs.map((doc) {
                           final d = doc.data() as Map<String, dynamic>;
-                          return DropdownMenuItem(value: doc, child: Text(d['roomName'] ?? '—'));
+                          return DropdownMenuItem<String>(
+                            value: doc.id, 
+                            child: Text(d['roomName'] ?? '—', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          );
                         }).toList(),
-                        onChanged: (doc) => setState(() => _selectedRoom = doc),
-                      );
-                    },
-                  ),
-                ),
-                if (_selectedRoom != null) Expanded(child: _buildSeatGrid()),
-              ],
+                        onChanged: (id) => setState(() => _selectedRoomId = id),
+                      ),
+                    ),
+                    if (selectedDoc != null) Expanded(child: _buildSeatGrid(selectedDoc)),
+                  ],
+                );
+              },
             ),
     );
   }
 
-  Widget _buildSeatGrid() {
+  Widget _buildSeatGrid(QueryDocumentSnapshot doc) {
     return StreamBuilder<DocumentSnapshot>(
-      stream: _selectedRoom!.reference.snapshots(),
+      stream: doc.reference.snapshots(),
       builder: (context, snap) {
-        final data = (snap.data?.data() as Map<String, dynamic>?) ?? (_selectedRoom!.data() as Map<String, dynamic>);
-        final layout = RoomLayout.fromMap(_selectedRoom!.id, data);
+        if (snap.connectionState == ConnectionState.waiting && !snap.hasData) {
+          return const Center(child: CircularProgressIndicator(color: Colors.amber));
+        }
+        final data = (snap.data?.data() as Map<String, dynamic>?) ?? (doc.data() as Map<String, dynamic>);
+        final layout = RoomLayout.fromMap(doc.id, data);
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
-              // Chỉ 2 lựa chọn - hiện cả 2 nút thay vì giấu trong dropdown, để
-              // staff thấy ngay đang ở chế độ đánh dấu nào trước khi chạm ghế.
               Row(
                 children: [
                   Expanded(
@@ -101,7 +132,7 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
                       onTap: () => setState(() => _target = MaintenanceTarget.broken),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: _TargetButton(
                       label: 'GHẾ XE LĂN',
@@ -114,8 +145,12 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
                 ],
               ),
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 12),
-                child: Text('Chạm vào ghế để đánh dấu/gỡ đánh dấu theo loại đang chọn ở trên', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text(
+                  'Chạm vào ghế để đánh dấu/gỡ đánh dấu theo loại đang chọn ở trên', 
+                  style: TextStyle(color: Colors.white38, fontSize: 11),
+                  textAlign: TextAlign.center,
+                ),
               ),
               SeatGridView(
                 layout: layout,
@@ -123,8 +158,8 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
                 maintenanceTarget: _target,
                 brokenSeats: layout.brokenSeats,
                 wheelchairSeats: layout.wheelchairSeats,
-                onToggleBroken: (seatId) => _toggleBroken(seatId, layout.brokenSeats.contains(seatId)),
-                onToggleWheelchair: (seatId) => _toggleWheelchair(seatId, layout.wheelchairSeats.contains(seatId)),
+                onToggleBroken: (seatId) => _toggleBroken(doc, data, seatId, layout.brokenSeats.contains(seatId)),
+                onToggleWheelchair: (seatId) => _toggleWheelchair(doc, data, seatId, layout.wheelchairSeats.contains(seatId)),
               ),
             ],
           ),
@@ -133,29 +168,26 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
     );
   }
 
-  void _toggleBroken(String seatId, bool currentlyBroken) async {
+  void _toggleBroken(QueryDocumentSnapshot doc, Map<String, dynamic> docData, String seatId, bool currentlyBroken) async {
     final update = {
       'brokenSeats': currentlyBroken ? FieldValue.arrayRemove([seatId]) : FieldValue.arrayUnion([seatId]),
     };
     final batch = FirebaseFirestore.instance.batch();
-    batch.update(_selectedRoom!.reference, update);
-    // Ghi cả vào seat_map_versions hiện tại (nguồn thật cho suất chiếu mới -
-    // xem models/showtime.dart Showtime.seatMapVersionId), không chỉ document
-    // phòng (vốn chỉ là bản sao cache hiển thị nhanh).
-    final currentVersionId = (_selectedRoom!.data() as Map<String, dynamic>)['currentSeatMapVersionId'] as String?;
+    batch.update(doc.reference, update);
+    final currentVersionId = docData['currentSeatMapVersionId'] as String?;
     if (currentVersionId != null) {
       batch.update(FirebaseFirestore.instance.collection('seat_map_versions').doc(currentVersionId), update);
     }
     await batch.commit();
   }
 
-  void _toggleWheelchair(String seatId, bool currentlyWheelchair) async {
+  void _toggleWheelchair(QueryDocumentSnapshot doc, Map<String, dynamic> docData, String seatId, bool currentlyWheelchair) async {
     final update = {
       'wheelchairSeats': currentlyWheelchair ? FieldValue.arrayRemove([seatId]) : FieldValue.arrayUnion([seatId]),
     };
     final batch = FirebaseFirestore.instance.batch();
-    batch.update(_selectedRoom!.reference, update);
-    final currentVersionId = (_selectedRoom!.data() as Map<String, dynamic>)['currentSeatMapVersionId'] as String?;
+    batch.update(doc.reference, update);
+    final currentVersionId = docData['currentSeatMapVersionId'] as String?;
     if (currentVersionId != null) {
       batch.update(FirebaseFirestore.instance.collection('seat_map_versions').doc(currentVersionId), update);
     }
@@ -183,18 +215,33 @@ class _TargetButton extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.18) : const Color(0xFF16161F),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: selected ? color : Colors.white12),
+          color: selected ? color.withValues(alpha: 0.12) : const Color(0xFF161622),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: selected ? color.withValues(alpha: 0.6) : Colors.white.withValues(alpha: 0.05), width: 1.2),
+          boxShadow: [
+            BoxShadow(
+              color: selected ? color.withValues(alpha: 0.05) : Colors.transparent,
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, color: selected ? color : Colors.white38, size: 18),
-            const SizedBox(height: 4),
-            Text(label, style: TextStyle(color: selected ? color : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            Text(
+              label, 
+              style: TextStyle(
+                color: selected ? color : Colors.white54, 
+                fontSize: 10, 
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              )
+            ),
           ],
         ),
       ),

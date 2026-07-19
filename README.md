@@ -131,7 +131,21 @@ PROMO_PUSH_ENABLED=true
 PROMO_PUSH_INTERVAL_HOURS=6
 ```
 
+
+Phần này là file `.env` cho `backend-payos` (server Node.js). Đây là mức độ cần thiết của từng phần:
+
+| Biến | Có cần điền không | Vì sao |
+|---|---|---|
+| `PORT` | Không cần đổi | Mặc định 3000 là ổn |
+| `PAYOS_CLIENT_ID/API_KEY/CHECKSUM_KEY` | **Chỉ cần nếu test thanh toán "Chuyển khoản ngân hàng (VietQR)"** | Không điền thì nút này sẽ lỗi khi bấm, nhưng thanh toán bằng **Ví Stella Wallet** (vừa sửa xong) vẫn chạy bình thường không cần cái này |
+| `TICKET_SIGNING_SECRET` | **Nên đổi**, dù chỉ test local | Dùng ký/xác thực QR vé check-in — giá trị mặc định trong file không an toàn, đổi thành 1 chuỗi ngẫu nhiên bất kỳ (VD chạy `openssl rand -hex 32` hoặc gõ đại 1 chuỗi dài) |
+| `CLOUDINARY_*` | **Chỉ cần nếu test luồng xác minh tuổi 18+** | Dùng upload ảnh CCCD; phim thường không đụng tới |
+| `GEMINI_API_KEY` | Không bắt buộc | Để trống được — chatbot sẽ chạy chế độ offline, hoặc điền sau qua **Admin → Cấu hình server** ngay trong app (không cần sửa file này) |
+
+Tóm lại: nếu chỉ đang test luồng đặt vé + thanh toán ví, chỉ cần đổi `TICKET_SIGNING_SECRET` là đủ chạy được, các mục còn lại điền sau khi cần test đúng tính năng đó.
+
 Đặt file `serviceAccountKey.json` (xin từ chủ dự án) vào thư mục `backend-payos/`.
+
 
 Chạy server:
 ```bash

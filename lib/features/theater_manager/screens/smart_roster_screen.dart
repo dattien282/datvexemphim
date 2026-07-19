@@ -18,7 +18,7 @@ class _SmartRosterScreenState extends State<SmartRosterScreen> {
     final dateStr = DateFormat('yyyy-MM-dd').format(_selectedDate);
 
     return Scaffold(
-      backgroundColor: const Color(0xFF111115),
+      backgroundColor: const Color(0xFF000000),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16161F),
         title: const Text('Phân công ca làm', style: TextStyle(color: Colors.deepPurpleAccent, fontSize: 16, fontWeight: FontWeight.bold)),
@@ -58,6 +58,11 @@ class _SmartRosterScreenState extends State<SmartRosterScreen> {
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent));
+                }
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text('Lỗi tải phân công ca làm: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                  );
                 }
                 final docs = snapshot.data?.docs ?? [];
                 
@@ -164,8 +169,11 @@ class _SmartRosterScreenState extends State<SmartRosterScreen> {
                   activeColor: Colors.deepPurpleAccent,
                   onChanged: (v) {
                     setDlg(() {
-                      if (v == true) selectedStaff.add(uid);
-                      else selectedStaff.remove(uid);
+                      if (v == true) {
+                        selectedStaff.add(uid);
+                      } else {
+                        selectedStaff.remove(uid);
+                      }
                     });
                   },
                 );

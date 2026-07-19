@@ -1,11 +1,14 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:http/http.dart' as http;
+import '../../../core/constants.dart';
 import '../../../main.dart';
 import '../../../providers/user_provider.dart';
 import '../../admin/screens/admin_dashboard_screen.dart';
@@ -54,6 +57,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               'Số điện thoại',
               Icons.phone_android_rounded,
               inputType: TextInputType.phone,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)],
             ),
           ],
         ),
@@ -99,17 +103,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Widget _buildField(
     TextEditingController ctrl,
-    String hint,
+    String label,
     IconData icon, {
     TextInputType inputType = TextInputType.text,
+    List<TextInputFormatter>? inputFormatters,
   }) {
     return TextField(
       controller: ctrl,
       keyboardType: inputType,
+      inputFormatters: inputFormatters,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(color: Colors.white38),
+        // labelText (nổi lên trên viền khi field có nội dung/focus) thay vì
+        // hintText - hintText biến mất ngay khi gõ, khiến người dùng mất dấu
+        // "field này là gì" một khi đã nhập xong và rời mắt đi chỗ khác.
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white54),
         prefixIcon: Icon(icon, color: Colors.amber, size: 20),
         filled: true,
         fillColor: const Color(0xFF121212),
@@ -135,9 +144,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
     setState(() => _isUploadingAvatar = true);
     try {
-      final ref = FirebaseStorage.instance.ref('avatars/$uid.jpg');
-      await ref.putFile(File(picked.path));
-      final url = await ref.getDownloadURL();
+      // Firebase Storage của project này chưa được khởi tạo (cần nâng cấp
+      // gói trả phí) - avatar chuyển sang Cloudinary, cùng cơ chế signed
+      // upload đã dùng cho ảnh CCCD (xem age_verification_screen.dart,
+      // backend-payos/server.js /cloudinary-sign) thay vì Firebase Storage.
+      final url = await _uploadAvatarToCloudinary(File(picked.path), uid);
+      if (url == null) throw Exception('Upload ảnh thất bại');
       await FirebaseFirestore.instance.collection('users').doc(uid).set({
         'avatarUrl': url,
       }, SetOptions(merge: true));
@@ -161,6 +173,43 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     } finally {
       if (mounted) setState(() => _isUploadingAvatar = false);
     }
+  }
+
+  // Xin chữ ký từ backend (bắt buộc đăng nhập) rồi upload thẳng lên
+  // Cloudinary - giống hệt cơ chế signed upload của age_verification_screen.dart,
+  // chỉ khác public_id cố định theo uid (ghi đè, không tạo file mới mỗi lần).
+  Future<String?> _uploadAvatarToCloudinary(File file, String uid) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return null;
+    final idToken = await user.getIdToken();
+
+    final signRes = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/cloudinary-sign'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+      body: jsonEncode({'type': 'avatar'}),
+    ).timeout(const Duration(seconds: 10));
+    final signData = jsonDecode(signRes.body);
+    if (signData['success'] != true) return null;
+
+    final url = Uri.parse('https://api.cloudinary.com/v1_1/${signData['cloudName']}/image/upload');
+    final request = http.MultipartRequest('POST', url)
+      ..fields['api_key'] = signData['apiKey']
+      ..fields['timestamp'] = signData['timestamp'].toString()
+      ..fields['public_id'] = signData['publicId']
+      ..fields['overwrite'] = 'true'
+      ..fields['signature'] = signData['signature']
+      ..files.add(await http.MultipartFile.fromPath('file', file.path));
+
+    final response = await request.send();
+    if (response.statusCode == 200) {
+      final responseData = await response.stream.bytesToString();
+      final jsonMap = jsonDecode(responseData);
+      return jsonMap['secure_url'] as String?;
+    }
+    return null;
   }
 
   // ── Reset password ────────────────────────────────────────────────────────
@@ -261,11 +310,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             TextField(
               controller: ctrl,
               keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
               ),
               decoration: InputDecoration(
+                labelText: 'Số tiền nạp',
+                labelStyle: const TextStyle(color: Colors.white54),
                 filled: true,
                 fillColor: const Color(0xFF121212),
                 border: OutlineInputBorder(
@@ -395,7 +447,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   )
                 : const SizedBox(),
             loading: () => const SizedBox(),
-            error: (_, __) => const SizedBox(),
+            error: (_, _) => const SizedBox(),
           ),
         ],
       ),
@@ -433,7 +485,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               children: [
                 CircleAvatar(
                   radius: 54,
-                  backgroundColor: Colors.amber.withOpacity(0.1),
+                  backgroundColor: Colors.amber.withValues(alpha: 0.1),
                   child: CircleAvatar(
                     radius: 48,
                     backgroundColor: Colors.amber,
@@ -514,7 +566,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.05)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -590,7 +642,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF0A0A0A),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: Colors.white.withOpacity(0.04)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.04)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -947,9 +999,9 @@ class _RoleBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1055,9 +1107,9 @@ class _MembershipCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
-                color: tierColor.withOpacity(0.15),
+                color: tierColor.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: tierColor.withOpacity(0.3)),
+                border: Border.all(color: tierColor.withValues(alpha: 0.3)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -1099,7 +1151,7 @@ class _MembershipCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: [
                       BoxShadow(
-                        color: tierColor.withOpacity(0.2),
+                        color: tierColor.withValues(alpha: 0.2),
                         blurRadius: 15,
                         spreadRadius: 2,
                         offset: const Offset(0, 8),
@@ -1116,7 +1168,7 @@ class _MembershipCard extends StatelessWidget {
                           height: 200,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.08),
+                            color: Colors.white.withValues(alpha: 0.08),
                           ),
                         ),
                       ),
@@ -1128,7 +1180,7 @@ class _MembershipCard extends StatelessWidget {
                           height: 150,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: Colors.white.withOpacity(0.05),
+                            color: Colors.white.withValues(alpha: 0.05),
                           ),
                         ),
                       ),
@@ -1167,7 +1219,7 @@ class _MembershipCard extends StatelessWidget {
                                   vertical: 4,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.1),
+                                  color: Colors.black.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: const Text(

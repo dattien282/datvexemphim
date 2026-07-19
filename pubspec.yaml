@@ -56,10 +56,14 @@ dependencies:
   url_launcher: ^6.3.1
   # State management
   flutter_riverpod: ^2.6.1
-  # Avatar upload
-  firebase_storage: ^13.4.2
+  # Avatar upload dùng Cloudinary (xem profile_screen.dart) - Firebase Storage
+  # của project chưa được khởi tạo, không dùng nữa.
   image_picker: ^1.1.2
   youtube_player_flutter: ^9.1.1
+  # Trailer tự lưu trên Cloudinary (xem movie_detail_screen.dart) - khác với
+  # trailer YouTube (youtube_player_flutter ở trên), video trực tiếp cần
+  # trình phát riêng.
+  video_player: ^2.9.2
   mobile_scanner: ^7.2.0
   qr_flutter: ^4.1.0
   http: ^1.6.0
@@ -71,5 +75,7 @@ dependencies:
   excel: ^4.0.6
   share_plus: ^13.2.0
   path_provider: ^2.1.5
+  shimmer: ^3.0.0
   flutter_markdown: ^0.7.7+1
   speech_to_text: ^7.4.0
+

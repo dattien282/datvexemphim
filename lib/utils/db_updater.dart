@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/showtime.dart';
 import '../models/room_layout.dart';
+import '../models/session_type.dart';
 
 class TheaterConfig {
   final int roomCount;
@@ -13,18 +14,39 @@ class TheaterConfig {
 }
 
 final Map<String, TheaterConfig> kTheaterConfigs = {
-  'Tân Phú': const TheaterConfig(8, ['Dolby Atmos', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 10.8015, 106.6166, '30 Bờ Bao Tân Thắng, Sơn Kỳ, Tân Phú, Thành phố Hồ Chí Minh'),
-  'Crescent': const TheaterConfig(7, ['VIP', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.7296, 106.7208, '101 Tôn Dật Tiên, Tân Phú, Quận 7, Thành phố Hồ Chí Minh'),
-  'Gigamall': const TheaterConfig(10, ['IMAX', 'Dolby Atmos', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard', 'Standard'], 10.8276, 106.7214, '240-242 Phạm Văn Đồng, Hiệp Bình Chánh, Thủ Đức, Thành phố Hồ Chí Minh'),
-  'Landmark': const TheaterConfig(9, ['IMAX', 'VIP', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 10.7950, 106.7218, 'Vinhomes Central Park, 720A Điện Biên Phủ, Phường 22, Bình Thạnh, Thành phố Hồ Chí Minh'),
+  'Tân Phú': const TheaterConfig(8, ['Dolby Atmos', 'Couple', 'Gold Class', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 10.8015, 106.6166, '30 Bờ Bao Tân Thắng, Sơn Kỳ, Tân Phú, Thành phố Hồ Chí Minh'),
+  'Crescent': const TheaterConfig(7, ['VIP - Laurus', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.7296, 106.7208, '101 Tôn Dật Tiên, Tân Phú, Quận 7, Thành phố Hồ Chí Minh'),
+  'Gigamall': const TheaterConfig(10, ['IMAX', 'Starium', 'Dolby Atmos', 'Gold Class', 'Couple', 'VIP - Laurus', 'VIP - Lagom', 'Standard', 'Standard', 'Standard'], 10.8276, 106.7214, '240-242 Phạm Văn Đồng, Hiệp Bình Chánh, Thủ Đức, Thành phố Hồ Chí Minh'),
+  'Landmark': const TheaterConfig(9, ['IMAX', 'VIP - Laurus', 'VIP - Lagom', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.7950, 106.7218, 'Vinhomes Central Park, 720A Điện Biên Phủ, Phường 22, Bình Thạnh, Thành phố Hồ Chí Minh'),
   'Vạn Hạnh': const TheaterConfig(8, ['4DX', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 10.7758, 106.6690, '11 Sư Vạn Hạnh, Phường 12, Quận 10, Thành phố Hồ Chí Minh'),
-  'Estella': const TheaterConfig(6, ['VIP', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.8016, 106.7397, '88 Song Hành, An Phú, Thủ Đức, Thành phố Hồ Chí Minh'),
+  'Estella': const TheaterConfig(6, ['VIP - Lagom', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.8016, 106.7397, '88 Song Hành, An Phú, Thủ Đức, Thành phố Hồ Chí Minh'),
   'Nguyễn Du': const TheaterConfig(5, ['Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 10.7744, 106.6953, '116 Nguyễn Du, Bến Thành, Quận 1, Thành phố Hồ Chí Minh'),
   'Mipec': const TheaterConfig(7, ['IMAX', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 21.0425, 105.8679, '2 Long Biên 2, Ngọc Lâm, Long Biên, Hà Nội'),
-  'Royal': const TheaterConfig(11, ['IMAX', '4DX', 'Dolby Atmos', 'VIP', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 21.0028, 105.8152, '72A Nguyễn Trãi, Thượng Đình, Thanh Xuân, Hà Nội'),
-  'Times': const TheaterConfig(10, ['IMAX', 'ScreenX', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard', 'Standard'], 20.9959, 105.8669, '458 Minh Khai, Vĩnh Phú, Hai Bà Trưng, Hà Nội'),
-  'Cần Thơ': const TheaterConfig(6, ['Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 10.0345, 105.7865, '1 Đại lộ Hòa Bình, Tân An, Ninh Kiều, Cần Thơ'),
+  'Royal': const TheaterConfig(11, ['IMAX', 'Starium', '4DX', 'Dolby Atmos', 'Gold Class', 'VIP - Laurus', 'Couple', 'Premium', 'Standard', 'Standard', 'Standard'], 21.0028, 105.8152, '72A Nguyễn Trãi, Thượng Đình, Thanh Xuân, Hà Nội'),
+  'Times': const TheaterConfig(10, ['IMAX', 'ScreenX', 'Gold Class', 'Couple', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard', 'Standard'], 20.9959, 105.8669, '458 Minh Khai, Vĩnh Phú, Hai Bà Trưng, Hà Nội'),
+  'Cần Thơ': const TheaterConfig(6, ['Couple', 'VIP - Lagom', 'Premium', 'Standard', 'Standard', 'Standard'], 10.0345, 105.7865, '1 Đại lộ Hòa Bình, Tân An, Ninh Kiều, Cần Thơ'),
   'Đà Nẵng': const TheaterConfig(7, ['IMAX', 'Dolby Atmos', 'Premium', 'Premium', 'Standard', 'Standard', 'Standard'], 16.0718, 108.2307, '910A Ngô Quyền, An Hải Bắc, Sơn Trà, Đà Nẵng'),
+};
+
+// Giá vé tham khảo theo từng định dạng phòng (đ) - phân khúc cao cấp hơn thì
+// giá Standard/VIP nền cũng cao hơn, khớp mô hình giá thật của các hệ thống
+// rạp (Gold Class/Starium/IMAX đắt hơn nhiều so với phòng Standard thường).
+// [priceStandard, priceVip] - priceVip cũng là giá nền cho ghế đôi/ghế lớn
+// (xem seatPrice() ở backend-payos/server.js: sweetbox = priceVip + 80000).
+const Map<String, List<int>> _kFormatPricing = {
+  'Standard': [80000, 110000],
+  'Couple': [80000, 120000],
+  'VIP': [90000, 140000],
+  'VIP - Laurus': [95000, 160000],
+  'VIP - Lagom': [90000, 150000],
+  'Premium': [100000, 170000],
+  'Dolby Atmos': [100000, 170000],
+  'Onyx LED': [110000, 190000],
+  'Gold Class': [150000, 250000],
+  'IMAX': [110000, 150000],
+  'ScreenX': [100000, 140000],
+  '4DX': [150000, 180000],
+  'Starium': [130000, 170000],
 };
 
 TheaterConfig _getConfigForTheater(String name) {
@@ -66,15 +88,21 @@ Future<void> updateTheaterSizesAndSeedShowtimes() async {
     
     for (int r = 0; r < config.roomCount; r++) {
       final format = config.roomLayouts[r];
+      // Dùng đúng preset hàng ghế của định dạng (kDefaultRoomFormatSpecs) thay vì
+      // công thức cứng cũ (10 hàng thường + 2 hàng vip chỉ cho 3 định dạng) -
+      // công thức cũ làm sai lệch layout với seatLayoutKind đã suy ra (VD
+      // phòng Gold Class/VIP - Laurus toàn ghế lớn nhưng vẫn bị gán 10 hàng
+      // ghế thường), và không hỗ trợ được các định dạng mới thêm vào.
+      final spec = findRoomFormatSpec(format);
       await firestore.collection('rooms').add({
         'theaterName': name,
         'name': 'Rạp ${r + 1}',
         'roomFormat': format,
         'seatLayoutKind': seatLayoutKindToString(seatLayoutKindForFormat(format)),
-        'standardRows': 10,
-        'vipRows': format == 'VIP' || format == 'IMAX' || format == 'Premium' ? 2 : 0,
-        'sweetboxRows': format == 'Couple' ? 2 : 0,
-        'seatsPerRow': 12,
+        'standardRows': spec?.standardRows ?? 10,
+        'vipRows': spec?.vipRows ?? 0,
+        'sweetboxRows': spec?.sweetboxRows ?? 0,
+        'seatsPerRow': spec?.seatsPerRow ?? 12,
         'createdAt': FieldValue.serverTimestamp(),
       });
     }
@@ -90,6 +118,11 @@ Future<void> updateTheaterSizesAndSeedShowtimes() async {
 
   final random = Random();
   const languages = ['Phụ đề', 'Lồng tiếng'];
+  // Dàn 6 khung giờ trải từ sáng sớm tới khuya (thay vì chỉ 5 khung gần như
+  // trùng giờ hành chính) để sessionType tự suy ra (detectSessionType) phủ đủ
+  // Morning/Late Morning/Afternoon/Prime Time/Evening/Midnight - đúng tinh
+  // thần "đa dạng giờ chiếu" thay vì chỉ lặp lại vài khung gần giống nhau.
+  const baseHours = [8, 10, 13, 16, 19, 22];
 
   // Seed cho 5 ngày tới
   for (int i = 0; i < 5; i++) {
@@ -99,30 +132,56 @@ Future<void> updateTheaterSizesAndSeedShowtimes() async {
       final theaterName = theaterDoc.data()['name'] as String;
       final config = _getConfigForTheater(theaterName);
 
-      final movies = movieSnap.docs.toList()..shuffle();
-      if (movies.isEmpty) continue;
+      // Giới hạn số phim KHÁC NHAU được chiếu ở mỗi rạp/ngày, thay vì dùng
+      // toàn bộ danh sách phim - trước đây khi số phim đang chiếu (thường
+      // 15-20+) nhiều hơn số phòng của rạp (5-11), công thức `movies[r %
+      // movies.length]` gán mỗi phòng 1 phim RIÊNG BIỆT không trùng ai, nên 1
+      // phim chỉ bao giờ xuất hiện ở đúng 1 định dạng/1 rạp - không đúng thực
+      // tế rạp phim (phim hot luôn chiếu song song nhiều định dạng: 2D
+      // Standard + VIP + IMAX...). Giới hạn còn ~roomCount/2 phim để mỗi phim
+      // tự lặp lại qua ÍT NHẤT 2 phòng/định dạng khác nhau.
+      final shuffledMovies = movieSnap.docs.toList()..shuffle();
+      if (shuffledMovies.isEmpty) continue;
+      final movieCap = (config.roomCount / 2).ceil().clamp(2, 6);
+      final movies = shuffledMovies.take(movieCap).toList();
 
-      // Mỗi phòng sẽ chiếu 5 suất một ngày (từ 8h sáng tới 20-21h tối)
       for (int r = 0; r < config.roomCount; r++) {
-        // Chia đều phim cho các phòng. Ví dụ 10 phòng, 3 phim => mỗi phim được chia 3-4 phòng khác nhau.
+        // Chia đều phim cho các phòng - cùng 1 phim rơi vào nhiều phòng/định
+        // dạng khác nhau nhờ movieCap giới hạn ở trên.
         final movie = movies[r % movies.length];
+        final movieData = movie.data();
+        final movieTitle = movieData['title'] as String? ?? '';
+        final movieReleaseDate = parseReleaseDate(movieData['releaseDate'] as String?);
         final format = config.roomLayouts[r];
         final language = languages[random.nextInt(languages.length)];
+        final pricing = _kFormatPricing[format] ?? const [80000, 110000];
+        // Phòng hỗ trợ nhiều tổ hợp trình chiếu/âm thanh (VD IMAX chiếu được
+        // cả IMAX 2D lẫn IMAX 3D) - random giữa các tổ hợp có sẵn theo từng
+        // suất để lịch chiếu thật sự đa dạng định dạng trong ngày, khớp cách
+        // các cụm rạp thật xếp lịch (không phải suất nào cũng cùng 1 bản).
+        final capabilities = defaultCapabilitiesForFormat(format);
 
-        for (int showNum = 0; showNum < 5; showNum++) {
-          final hour = 8 + (showNum * 3) + random.nextInt(2); // Khoảng 8h, 11h, 14h, 17h, 20h
+        for (int showNum = 0; showNum < baseHours.length; showNum++) {
+          final hour = (baseHours[showNum] + random.nextInt(2)).clamp(6, 23);
           final minute = random.nextInt(4) * 15; // 0, 15, 30, 45
           final showAt = DateTime(date.year, date.month, date.day, hour, minute);
+          final capability = capabilities[random.nextInt(capabilities.length)];
 
           await firestore.collection('showtimes').add({
-            'movieId': movie.id,
+            'movieTitle': movieTitle,
             'theaterName': theaterName,
             'showAt': Timestamp.fromDate(showAt),
             'date': Showtime.isoDate(showAt),
             'time': Showtime.hhmm(showAt),
             'roomName': 'Rạp ${r + 1}',
             'roomFormat': format,
+            'projectionFormat': capability.projectionFormat,
+            'soundFormat': capability.soundFormat,
             'language': language,
+            'sessionType': detectSessionType(showAt, movieReleaseDate),
+            'priceStandard': pricing[0],
+            'priceVip': pricing[1],
+            'status': 'active',
             'createdAt': FieldValue.serverTimestamp(),
           });
         }
@@ -172,7 +231,7 @@ Future<void> migrateShowtimesToTimestamp() async {
 }
 
 /// Mapping định dạng phòng cũ sang hệ 9 định dạng cuối cùng của Stella Cinema
-/// (xem models/room_layout.dart kRoomFormatSpecs: Standard/Couple/VIP/Premium/
+/// (xem models/room_layout.dart kDefaultRoomFormatSpecs: Standard/Couple/VIP/Premium/
 /// Dolby Atmos/Onyx LED/IMAX/ScreenX/4DX). Bao gồm cả tên gốc trước khi có hệ
 /// thống định dạng riêng ('2D Phụ đề', 'GoldClass'...) lẫn tên trung gian
 /// ('Standard (2D/3D)', 'Gold Class', 'Sweetbox'...) từng dùng ở 1 phiên bản
@@ -263,4 +322,31 @@ Future<void> migrateRoomFormatsToStellaBranding() async {
   }
 
   print('Migrated $roomsMigrated rooms and $showtimesMigrated showtimes to Stella Cinema format branding.');
+}
+
+/// Migration one-off (Giai đoạn H): chuyển 13 định dạng phòng chiếu từ hằng
+/// số hardcode kDefaultRoomFormatSpecs (models/room_layout.dart) sang
+/// collection Firestore 'room_formats' - để admin tự thêm/sửa/archive định
+/// dạng qua AdminRoomFormatsScreen mà không cần sửa code + build lại app.
+/// Chỉ seed nếu collection đang RỖNG (idempotent - chạy lại nhiều lần không
+/// tạo trùng), không đụng gì tới 'rooms'/'showtimes' hiện có: chúng vẫn tham
+/// chiếu roomFormat bằng TÊN (string) như trước, không đổi cách join.
+Future<void> migrateRoomFormatsToFirestore() async {
+  final firestore = FirebaseFirestore.instance;
+  print('Seeding room_formats collection...');
+
+  final existing = await firestore.collection('room_formats').limit(1).get();
+  if (existing.docs.isNotEmpty) {
+    print('room_formats đã có dữ liệu - bỏ qua seed để không tạo trùng.');
+    return;
+  }
+
+  final batch = firestore.batch();
+  for (final spec in kDefaultRoomFormatSpecs) {
+    final ref = firestore.collection('room_formats').doc();
+    batch.set(ref, spec.toMap());
+  }
+  await batch.commit();
+
+  print('Seeded ${kDefaultRoomFormatSpecs.length} room formats vào Firestore.');
 }

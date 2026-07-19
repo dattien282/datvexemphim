@@ -132,6 +132,24 @@ class AuthViewModel extends StateNotifier<AsyncValue<User?>> {
     await _repository.resetPassword(email);
   }
 
+  Future<Map<String, dynamic>> sendLoginOtp() async {
+    try {
+      await _repository.sendLoginOtp();
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'message': e.toString().replaceFirst('Exception: ', '')};
+    }
+  }
+
+  Future<Map<String, dynamic>> verifyLoginOtp(String code) async {
+    try {
+      await _repository.verifyLoginOtp(code);
+      return {'success': true};
+    } catch (e) {
+      return {'success': false, 'message': e.toString().replaceFirst('Exception: ', '')};
+    }
+  }
+
   Future<void> signOut() async {
     await _repository.signOut();
   }

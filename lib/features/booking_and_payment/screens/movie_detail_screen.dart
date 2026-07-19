@@ -3,12 +3,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:video_player/video_player.dart';
 import 'showtime_selection_screen.dart';
 import '../../auth/screens/login_screen.dart';
 
 class MovieDetailScreen extends StatefulWidget {
   final Map<String, dynamic> movieData;
-  const MovieDetailScreen({Key? key, required this.movieData}) : super(key: key);
+  const MovieDetailScreen({super.key, required this.movieData});
 
   @override
   State<MovieDetailScreen> createState() => _MovieDetailScreenState();
@@ -19,6 +20,7 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   double _selectedRating = 10.0;
   bool _isSubmittingReview = false;
   String _selectedSort = 'Mới nhất';
+  bool _descExpanded = false;
 
   @override
   void dispose() {
@@ -38,6 +40,14 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
     'Avatar 3': 'rZXmSgjxpdQ',
   };
 
+  // Trailer tự lưu trên Cloudinary (link video trực tiếp .mp4) khác hẳn
+  // trailer YouTube (cần convertUrlToId) - phân biệt bằng domain thay vì đuôi
+  // file, vì Cloudinary có thể trả về URL không có đuôi rõ ràng tuỳ transform.
+  bool get _isDirectVideoUrl {
+    final url = (widget.movieData['trailerUrl'] ?? '').toString();
+    return url.contains('cloudinary.com') || url.contains('res.cloudinary');
+  }
+
   String? _getVideoId() {
     final title = widget.movieData['title'] ?? '';
     // Ưu tiên map cứng
@@ -48,6 +58,32 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
   }
 
   void _showTrailer(BuildContext context) {
+    final trailerUrl = (widget.movieData['trailerUrl'] ?? '').toString();
+
+    if (_isDirectVideoUrl) {
+      if (trailerUrl.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Chưa có trailer cho phim này.')),
+        );
+        return;
+      }
+      Navigator.push(
+        context,
+        PageRouteBuilder(
+          opaque: true,
+          fullscreenDialog: true,
+          barrierColor: Colors.black,
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              FadeTransition(opacity: animation, child: child),
+          pageBuilder: (context, animation, secondaryAnimation) => _DirectVideoTrailerPage(
+            videoUrl: trailerUrl,
+            title: widget.movieData['title'] ?? '',
+          ),
+        ),
+      );
+      return;
+    }
+
     final videoId = _getVideoId();
     if (videoId == null || videoId.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -386,11 +422,27 @@ class _MovieDetailScreenState extends State<MovieDetailScreen> {
                     style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 8),
+                  // Nội dung phim dài dễ chiếm hết màn hình, đẩy phần đánh
+                  // giá/lịch chiếu xuống xa - thu gọn 3 dòng, cho bấm "Xem
+                  // thêm" để mở hết thay vì luôn hiện toàn văn.
                   Text(
                     description,
+                    maxLines: _descExpanded ? null : 3,
+                    overflow: _descExpanded ? TextOverflow.visible : TextOverflow.ellipsis,
                     style: const TextStyle(color: Colors.grey, fontSize: 14, height: 1.5),
                   ),
-                  
+                  if (description.length > 120)
+                    GestureDetector(
+                      onTap: () => setState(() => _descExpanded = !_descExpanded),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          _descExpanded ? 'Thu gọn' : 'Xem thêm',
+                          style: const TextStyle(color: Colors.amber, fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+
                   const Divider(color: Colors.white10, height: 40),
 
                   const Text(
@@ -817,6 +869,110 @@ class _TrailerFullscreenPageState extends State<_TrailerFullscreenPage> {
                   ),
                   onReady: () => _controller.play(),
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Trailer tự lưu trên Cloudinary (video trực tiếp .mp4) - dùng video_player
+// thay vì youtube_player_flutter (chỉ hiểu link YouTube). Giao diện khớp
+// _TrailerFullscreenPage để trải nghiệm nhất quán dù nguồn trailer khác nhau.
+class _DirectVideoTrailerPage extends StatefulWidget {
+  final String videoUrl;
+  final String title;
+  const _DirectVideoTrailerPage({required this.videoUrl, required this.title});
+
+  @override
+  State<_DirectVideoTrailerPage> createState() => _DirectVideoTrailerPageState();
+}
+
+class _DirectVideoTrailerPageState extends State<_DirectVideoTrailerPage> {
+  late final VideoPlayerController _controller;
+  bool _initFailed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl));
+    _controller.initialize().then((_) {
+      if (!mounted) return;
+      setState(() {});
+      _controller.play();
+    }).catchError((_) {
+      if (mounted) setState(() => _initFailed = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.play_circle_rounded, color: Colors.amber, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.title.toUpperCase(),
+                      style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 22),
+                    onPressed: () {
+                      _controller.pause();
+                      Navigator.pop(context);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: _initFailed
+                    ? const Text('Không phát được trailer - kiểm tra kết nối mạng.',
+                        style: TextStyle(color: Colors.white54, fontSize: 12))
+                    : _controller.value.isInitialized
+                        ? AspectRatio(
+                            aspectRatio: _controller.value.aspectRatio,
+                            child: Stack(
+                              alignment: Alignment.bottomCenter,
+                              children: [
+                                VideoPlayer(_controller),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.translucent,
+                                  onTap: () => setState(() =>
+                                      _controller.value.isPlaying ? _controller.pause() : _controller.play()),
+                                ),
+                                VideoProgressIndicator(
+                                  _controller,
+                                  allowScrubbing: true,
+                                  colors: const VideoProgressColors(
+                                    playedColor: Colors.amber,
+                                    bufferedColor: Colors.white24,
+                                    backgroundColor: Colors.white12,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        : const CircularProgressIndicator(color: Colors.amber),
               ),
             ),
           ],

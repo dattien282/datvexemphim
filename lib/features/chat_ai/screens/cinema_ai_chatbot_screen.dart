@@ -10,6 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../booking_and_payment/screens/movie_detail_screen.dart';
 import '../../booking_and_payment/screens/showtime_selection_screen.dart';
 import '../../../core/constants.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../../../providers/user_provider.dart';
 import '../../../providers/theaters_provider.dart';
 
@@ -256,6 +257,21 @@ class _CinemaAiChatbotScreenState extends ConsumerState<CinemaAiChatbotScreen> {
         final history = _messages.skip(1).take(10).map((msg) {
           return {'role': msg['sender'] == 'user' ? 'user' : 'model', 'text': msg['text'] ?? ''};
         }).toList();
+
+
+        final user = FirebaseAuth.instance.currentUser;
+        if (user == null) {
+          throw 'User not authenticated';
+        }
+        final token = await user.getIdToken();
+
+        final response = await http.post(
+          Uri.parse('${AppConfig.paymentBackendUrl}/gemini-chat'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({'message': userText, 'movieContext': movieContext, 'history': history}),
 
         final fullMovieContext = "$movieContext\n$locationContext\n$userContext";
 

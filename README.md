@@ -124,6 +124,11 @@ CLOUDINARY_API_SECRET=...
 
 # Tuỳ chọn - chatbot AI Gemini; có thể để trống và cấu hình qua Admin > Server Config trong app thay vì .env
 GEMINI_API_KEY=
+
+# Tuỳ chọn - push quảng cáo định kỳ (voucher/phim hot/combo/suất chiếu ưu đãi)
+# gửi thẳng xuống thiết bị qua FCM, không cần admin bấm tay. Mặc định: bật, mỗi 6 giờ.
+PROMO_PUSH_ENABLED=true
+PROMO_PUSH_INTERVAL_HOURS=6
 ```
 
 
@@ -145,7 +150,7 @@ Tóm lại: nếu chỉ đang test luồng đặt vé + thanh toán ví, chỉ c
 Chạy server:
 ```bash
 npm start
-# hoặc: node server.js
+# hoặc: node index.js
 ```
 Server chạy tại `http://localhost:3000`. Log khởi động sẽ báo `✅ Firebase Admin SDK initialized.` nếu `serviceAccountKey.json` hợp lệ — nếu thấy cảnh báo `⚠️ Firebase Admin SDK init failed`, kiểm tra lại file này trước khi tiếp tục (gần như mọi tính năng thanh toán/vé sẽ không hoạt động nếu thiếu).
 

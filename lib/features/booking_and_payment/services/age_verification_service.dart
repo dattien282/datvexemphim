@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../screens/age_verification_screen.dart';
@@ -124,12 +125,13 @@ class AgeVerificationService {
                   TextField(
                     controller: cccdCtrl,
                     keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     maxLength: 12,
                     style: const TextStyle(color: Colors.white, fontSize: 13),
                     decoration: InputDecoration(
                       counterText: '',
-                      hintText: 'Nhập số CCCD (12 số)',
-                      hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
+                      labelText: 'Số CCCD (12 số)',
+                      labelStyle: const TextStyle(color: Colors.white54, fontSize: 12),
                       errorText: error,
                       filled: true,
                       fillColor: const Color(0xFF1E1E2A),

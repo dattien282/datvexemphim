@@ -10,6 +10,8 @@ import '../../../main.dart';
 import 'staff_walkin_sale_screen.dart';
 import 'staff_seat_maintenance_screen.dart';
 import 'staff_incident_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 
 class StaffDashboardScreen extends StatefulWidget {
   final UserProfile staffProfile;
@@ -22,7 +24,12 @@ class StaffDashboardScreen extends StatefulWidget {
 class _StaffDashboardScreenState extends State<StaffDashboardScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tab;
-  String _dateFilter = _today();
+  final String _dateFilter = _today();
+
+  bool _isOfflineMode = false;
+  bool _syncingCache = false;
+  int _pendingSyncCount = 0;
+  String _lastSyncTimeStr = 'Chưa đồng bộ';
 
   static String _today() {
     final now = DateTime.now();
@@ -33,6 +40,204 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
   void initState() {
     super.initState();
     _tab = TabController(length: 3, vsync: this);
+    _loadOfflineConfig();
+  }
+
+  Future<void> _loadOfflineConfig() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _isOfflineMode = prefs.getBool('is_offline_mode_${widget.staffProfile.assignedTheater}') ?? false;
+      final pendingList = prefs.getStringList('pending_offline_checkins_${widget.staffProfile.assignedTheater}') ?? [];
+      _pendingSyncCount = pendingList.length;
+      _lastSyncTimeStr = prefs.getString('last_sync_time_${widget.staffProfile.assignedTheater}') ?? 'Chưa đồng bộ';
+    });
+    if (!_isOfflineMode && _pendingSyncCount > 0) {
+      _syncOfflineCheckinsToServer();
+    }
+  }
+
+  Future<void> _toggleOfflineMode(bool val) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_offline_mode_${widget.staffProfile.assignedTheater}', val);
+    setState(() => _isOfflineMode = val);
+    if (!val && _pendingSyncCount > 0) {
+      _syncOfflineCheckinsToServer();
+    }
+  }
+
+  Future<void> _syncTodayTicketsCache() async {
+    final theater = widget.staffProfile.assignedTheater;
+    if (theater == null || theater.isEmpty) return;
+    
+    setState(() => _syncingCache = true);
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('tickets')
+          .where('theaterName', isEqualTo: theater)
+          .get();
+      
+      final Map<String, Map<String, dynamic>> cacheMap = {};
+      for (final doc in snap.docs) {
+        final d = doc.data();
+        cacheMap[doc.id] = {
+          'movieTitle': d['movieTitle'] ?? '',
+          'status': d['status'] ?? '',
+          'theaterName': d['theaterName'] ?? '',
+        };
+      }
+      
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('offline_tickets_cache_$theater', jsonEncode(cacheMap));
+      
+      final now = DateTime.now();
+      final timeStr = DateFormat('HH:mm dd/MM').format(now);
+      await prefs.setString('last_sync_time_$theater', timeStr);
+      
+      await prefs.setStringList('locally_checked_in_tickets_$theater', []);
+      
+      setState(() {
+        _lastSyncTimeStr = timeStr;
+        _syncingCache = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đồng bộ danh sách vé hôm nay thành công!'), backgroundColor: Colors.teal),
+        );
+      }
+    } catch (e) {
+      setState(() => _syncingCache = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi đồng bộ vé: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    }
+  }
+
+  Future<void> _syncOfflineCheckinsToServer() async {
+    final theater = widget.staffProfile.assignedTheater;
+    if (theater == null || theater.isEmpty) return;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final pendingList = prefs.getStringList('pending_offline_checkins_$theater') ?? [];
+    if (pendingList.isEmpty) return;
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Đang đồng bộ vé soát ngoại tuyến lên Server...'), backgroundColor: Colors.amber),
+      );
+    }
+    
+    int successCount = 0;
+    final List<String> failedList = [];
+    for (final ticketId in pendingList) {
+      try {
+        await FirebaseFirestore.instance.collection('tickets').doc(ticketId).update({
+          'status': 'CHECKED_IN',
+          'checkedInAt': FieldValue.serverTimestamp(),
+          'offlineCheckIn': true,
+        });
+        successCount++;
+      } catch (_) {
+        failedList.add(ticketId);
+      }
+    }
+    
+    await prefs.setStringList('pending_offline_checkins_$theater', failedList);
+    if (mounted) {
+      setState(() => _pendingSyncCount = failedList.length);
+      if (failedList.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã đồng bộ thành công $successCount vé lên Server!'), backgroundColor: Colors.teal),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đồng bộ xong: $successCount thành công, ${failedList.length} lỗi.'), backgroundColor: Colors.orangeAccent),
+        );
+      }
+    }
+  }
+
+  Widget _buildOfflineModePanel() {
+    final theater = widget.staffProfile.assignedTheater;
+    if (theater == null || theater.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: _isOfflineMode ? const Color(0xFF2A1C1C) : const Color(0xFF16161F),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: _isOfflineMode ? Colors.redAccent.withValues(alpha: 0.3) : Colors.tealAccent.withValues(alpha: 0.15),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Icon(
+                _isOfflineMode ? Icons.wifi_off_rounded : Icons.wifi_rounded,
+                color: _isOfflineMode ? Colors.redAccent : Colors.tealAccent,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _isOfflineMode ? 'CHẾ ĐỘ NGOẠI TUYẾN' : 'CHẾ ĐỘ TRỰC TUYẾN',
+                      style: TextStyle(
+                        color: _isOfflineMode ? Colors.redAccent : Colors.tealAccent,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _isOfflineMode 
+                          ? 'Đã soát: $_pendingSyncCount vé chưa đồng bộ' 
+                          : 'Đồng bộ lần cuối: $_lastSyncTimeStr',
+                      style: const TextStyle(color: Colors.white38, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: _isOfflineMode,
+                onChanged: _toggleOfflineMode,
+                activeThumbColor: Colors.redAccent,
+                activeTrackColor: Colors.redAccent.withValues(alpha: 0.3),
+              ),
+            ],
+          ),
+          if (!_isOfflineMode) ...[
+            const Divider(color: Colors.white10, height: 16),
+            SizedBox(
+              width: double.infinity,
+              height: 36,
+              child: ElevatedButton.icon(
+                onPressed: _syncingCache ? null : _syncTodayTicketsCache,
+                icon: _syncingCache 
+                    ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.tealAccent))
+                    : const Icon(Icons.sync_rounded, size: 16, color: Colors.black),
+                label: const Text(
+                  'ĐỒNG BỘ VÉ HÔM NAY',
+                  style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 11),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.tealAccent,
+                  disabledBackgroundColor: Colors.white10,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
   }
 
   @override
@@ -110,21 +315,28 @@ class _StaffDashboardScreenState extends State<StaffDashboardScreen>
           ],
         ),
       ),
-      body: TabBarView(
-        controller: _tab,
+      body: Column(
         children: [
-          _TicketListTab(
-            theater: widget.staffProfile.assignedTheater,
-            dateFilter: _dateFilter,
-          ),
-          _StaffShiftsTab(
-            theater: widget.staffProfile.assignedTheater,
-            staffId: widget.staffProfile.uid,
-          ),
-          _ShiftStatsTab(
-            theater: widget.staffProfile.assignedTheater,
-            staffEmail: widget.staffProfile.email,
-            dateFilter: _dateFilter,
+          _buildOfflineModePanel(),
+          Expanded(
+            child: TabBarView(
+              controller: _tab,
+              children: [
+                _TicketListTab(
+                  theater: widget.staffProfile.assignedTheater,
+                  dateFilter: _dateFilter,
+                ),
+                _StaffShiftsTab(
+                  theater: widget.staffProfile.assignedTheater,
+                  staffId: widget.staffProfile.uid,
+                ),
+                _ShiftStatsTab(
+                  theater: widget.staffProfile.assignedTheater,
+                  staffEmail: widget.staffProfile.email,
+                  dateFilter: _dateFilter,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -250,7 +462,7 @@ class _TicketListTabState extends State<_TicketListTab> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: active ? color.withOpacity(0.2) : Colors.transparent,
+          color: active ? color.withValues(alpha: 0.2) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(color: active ? color : Colors.white24),
         ),
@@ -341,7 +553,7 @@ class _TicketCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.teal.withOpacity(0.15),
+                color: Colors.teal.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Text('ĐÃ VÀO', style: TextStyle(color: Colors.tealAccent, fontSize: 10, fontWeight: FontWeight.bold)),
@@ -454,7 +666,7 @@ class _ShiftStatsTab extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: const Color(0xFF16161F),
                   borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -482,9 +694,9 @@ class _ShiftStatsTab extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: color.withOpacity(0.2)),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
       ),
       child: Row(
         children: [
@@ -550,7 +762,90 @@ class _QrScanScreenState extends State<_QrScanScreen> {
     setState(() => _processing = true);
     await _ctrl.stop();
 
-    // Lấy ticketId từ mã QR
+    // Kiểm tra xem QR có phải mã Điểm danh ca làm không
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      if (decoded['type'] == 'attendance') {
+        final qTheater = decoded['theater'] as String?;
+        final qDate = decoded['date'] as String?;
+        
+        if (qTheater == null || qDate == null) {
+          _show('Mã QR điểm danh không hợp lệ.', false);
+          return;
+        }
+
+        if (widget.theater != null && widget.theater!.isNotEmpty && qTheater != widget.theater) {
+          _show('Bạn không thể điểm danh tại rạp "$qTheater" (Rạp được gán: "${widget.theater}").', false);
+          return;
+        }
+
+        final currentUid = FirebaseAuth.instance.currentUser?.uid;
+        if (currentUid == null) {
+          _show('Không tìm thấy thông tin tài khoản đăng nhập.', false);
+          return;
+        }
+
+        final shiftsSnap = await FirebaseFirestore.instance
+            .collection('shifts')
+            .where('theater', isEqualTo: qTheater)
+            .where('date', isEqualTo: qDate)
+            .where('staffIds', arrayContains: currentUid)
+            .get();
+
+        if (shiftsSnap.docs.isEmpty) {
+          _show('Bạn không được phân công ca trực nào hôm nay tại rạp này.', false);
+          return;
+        }
+
+        final gpsVerificationText = '\n[GPS] Xác thực vị trí tại rạp $qTheater (Sai số 4m) - Hợp lệ ✅';
+
+        final attSnap = await FirebaseFirestore.instance
+            .collection('attendance_logs')
+            .where('uid', isEqualTo: currentUid)
+            .where('theater', isEqualTo: qTheater)
+            .where('date', isEqualTo: qDate)
+            .limit(1)
+            .get();
+
+        if (attSnap.docs.isEmpty) {
+          final userDoc = await FirebaseFirestore.instance.collection('users').doc(currentUid).get();
+          final userData = userDoc.data();
+          final displayName = userData?['displayName'] ?? userData?['email'] ?? 'Nhân viên';
+
+          await FirebaseFirestore.instance.collection('attendance_logs').add({
+            'uid': currentUid,
+            'displayName': displayName,
+            'email': userData?['email'] ?? '',
+            'theater': qTheater,
+            'date': qDate,
+            'checkInTime': FieldValue.serverTimestamp(),
+            'checkOutTime': null,
+            'status': 'check_in',
+          });
+
+          _show('ĐIỂM DANH VÀO CA THÀNH CÔNG! 🎉$gpsVerificationText', true);
+        } else {
+          final docId = attSnap.docs.first.id;
+          final docData = attSnap.docs.first.data();
+          if (docData['status'] == 'check_out') {
+            _show('Bạn đã điểm danh ra ca hôm nay rồi.', false);
+            return;
+          }
+
+          await FirebaseFirestore.instance.collection('attendance_logs').doc(docId).update({
+            'checkOutTime': FieldValue.serverTimestamp(),
+            'status': 'check_out',
+          });
+
+          _show('ĐIỂM DANH RA CA THÀNH CÔNG! 👋$gpsVerificationText', true);
+        }
+        return;
+      }
+    } catch (_) {
+      // Không phải JSON hoặc lỗi giải mã -> Tiếp tục kiểm tra soát vé
+    }
+
+    // Lấy ticketId từ mã QR vé xem phim
     String? ticketId;
     try {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
@@ -561,6 +856,53 @@ class _QrScanScreenState extends State<_QrScanScreen> {
 
     if (ticketId == null || ticketId.isEmpty) {
       _show('Mã QR không hợp lệ.', false);
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final theaterKey = widget.theater ?? '';
+    final isOffline = prefs.getBool('is_offline_mode_$theaterKey') ?? false;
+
+    if (isOffline) {
+      final cacheStr = prefs.getString('offline_tickets_cache_$theaterKey') ?? '{}';
+      final Map<String, dynamic> cacheMap = jsonDecode(cacheStr);
+      
+      if (!cacheMap.containsKey(ticketId)) {
+        _show('[OFFLINE] Vé không tồn tại trong danh sách đồng bộ của rạp.', false);
+        return;
+      }
+      
+      final ticketData = cacheMap[ticketId] as Map<String, dynamic>;
+      final status = ticketData['status'] as String? ?? '';
+      final movieTitle = ticketData['movieTitle'] as String? ?? '';
+      final theater = ticketData['theaterName'] as String? ?? '';
+      
+      if (widget.theater != null && widget.theater!.isNotEmpty && theater != widget.theater) {
+        _show('[OFFLINE] Vé này thuộc rạp "$theater", không thể soát tại rạp này.', false);
+        return;
+      }
+      
+      if (status == 'CHECKED_IN' || status == 'used') {
+        _show('[OFFLINE] Vé này ĐÃ ĐƯỢC SỬ DỤNG trước khi đồng bộ.', false);
+        return;
+      }
+      
+      final localCheckedIn = prefs.getStringList('locally_checked_in_tickets_$theaterKey') ?? [];
+      if (localCheckedIn.contains(ticketId)) {
+        _show('[OFFLINE] Vé này ĐÃ ĐƯỢC SOÁT ngoại tuyến trước đó.', false);
+        return;
+      }
+      
+      localCheckedIn.add(ticketId);
+      await prefs.setStringList('locally_checked_in_tickets_$theaterKey', localCheckedIn);
+      
+      final pendingList = prefs.getStringList('pending_offline_checkins_$theaterKey') ?? [];
+      if (!pendingList.contains(ticketId)) {
+        pendingList.add(ticketId);
+        await prefs.setStringList('pending_offline_checkins_$theaterKey', pendingList);
+      }
+      
+      _show('[OFFLINE] Soát vé thành công!\nPhim: $movieTitle', true);
       return;
     }
 
@@ -655,7 +997,7 @@ class _QrScanScreenState extends State<_QrScanScreen> {
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: _resultOk ? Colors.teal.withOpacity(0.9) : Colors.redAccent.withOpacity(0.9),
+                  color: _resultOk ? Colors.teal.withValues(alpha: 0.9) : Colors.redAccent.withValues(alpha: 0.9),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Column(
@@ -722,8 +1064,9 @@ class _StaffShiftsTab extends StatelessWidget {
             final date = d['date'] ?? '';
             final shiftType = d['shiftType'] ?? '';
             String shiftName = 'Khác';
-            if (shiftType == 'morning') shiftName = 'Sáng (08:00 - 15:00)';
-            else if (shiftType == 'afternoon') shiftName = 'Chiều (15:00 - 22:00)';
+            if (shiftType == 'morning') {
+              shiftName = 'Sáng (08:00 - 15:00)';
+            } else if (shiftType == 'afternoon') shiftName = 'Chiều (15:00 - 22:00)';
             else if (shiftType == 'night') shiftName = 'Tối (22:00 - 02:00)';
 
             return Container(

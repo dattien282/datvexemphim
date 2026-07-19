@@ -90,7 +90,7 @@ class VoucherCard extends StatelessWidget {
         color: const Color(0xFF16161F),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color: effectiveActive ? Colors.orange.withOpacity(0.3) : Colors.white.withOpacity(0.05),
+          color: effectiveActive ? Colors.orange.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.05),
         ),
       ),
       child: Column(
@@ -99,7 +99,7 @@ class VoucherCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: effectiveActive ? Colors.orange.withOpacity(0.08) : Colors.white.withOpacity(0.03),
+              color: effectiveActive ? Colors.orange.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.03),
               borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
             ),
             child: Row(
@@ -124,7 +124,7 @@ class VoucherCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: effectiveActive ? Colors.green.withOpacity(0.15) : Colors.red.withOpacity(0.15),
+                        color: effectiveActive ? Colors.green.withValues(alpha: 0.15) : Colors.red.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
@@ -300,7 +300,8 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
               const Text('Áp dụng cho:', style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 6),
               DropdownButtonFormField<String?>(
-                value: _theaterScope,
+                isExpanded: true,
+                initialValue: _theaterScope,
                 dropdownColor: const Color(0xFF1E1E2A),
                 decoration: InputDecoration(
                   filled: true,
@@ -397,7 +398,7 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: active ? Colors.orange.withOpacity(0.2) : Colors.transparent,
+          color: active ? Colors.orange.withValues(alpha: 0.2) : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: active ? Colors.orange : Colors.white24),
         ),

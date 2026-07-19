@@ -10,6 +10,13 @@ import '../../../models/seat_grid.dart';
 ///   seat maintenance dialog).
 enum SeatGridMode { booking, maintenance }
 
+/// Loại đánh dấu đang được chỉnh sửa trong [SeatGridMode.maintenance] - quyết
+/// định tap vào ghế sẽ gọi [SeatGridView.onToggleBroken] hay
+/// [SeatGridView.onToggleWheelchair]. Cả 2 loại đánh dấu vẫn luôn hiển thị
+/// đồng thời bất kể đang sửa loại nào (1 ghế có thể vừa hỏng vừa là ghế xe
+/// lăn), chỉ có hành vi tap là đổi theo target.
+enum MaintenanceTarget { broken, wheelchair }
+
 /// Sơ đồ ghế dùng chung, thay cho 4 bản dựng UI ghế độc lập trước đây (mỗi bản
 /// tự tính row label + seatId + màu sắc riêng, dễ lệch nhau khi sửa 1 chỗ mà
 /// quên sửa chỗ khác). Toàn bộ màu sắc/kích thước giữ nguyên như bản gốc trong
@@ -28,6 +35,14 @@ class SeatGridView extends StatelessWidget {
   // Dùng cho mode == maintenance.
   final Set<String> brokenSeats;
   final void Function(String seatId)? onToggleBroken;
+  final void Function(String seatId)? onToggleWheelchair;
+  final MaintenanceTarget maintenanceTarget;
+
+  // Ghế xe lăn - hiển thị ở CẢ 2 mode (booking: khách thấy icon xe lăn để
+  // biết ghế nào dành cho người khuyết tật; maintenance: staff đánh dấu ghế
+  // nào là ghế xe lăn). Không gắn với 1 roomFormat/seatLayoutKind cụ thể nào -
+  // phòng nào cũng có thể có vài ghế xe lăn (xem RoomLayout.wheelchairSeats).
+  final Set<String> wheelchairSeats;
 
   /// Sơ đồ nhỏ hơn khi nhúng trong AlertDialog có giới hạn chiều rộng.
   final bool dense;
@@ -43,17 +58,35 @@ class SeatGridView extends StatelessWidget {
     this.onSeatTap,
     this.brokenSeats = const {},
     this.onToggleBroken,
+    this.onToggleWheelchair,
+    this.maintenanceTarget = MaintenanceTarget.broken,
+    this.wheelchairSeats = const {},
     this.dense = false,
   });
 
   bool get _isMaintenance => mode == SeatGridMode.maintenance;
 
+  // Vị trí chèn LỐI ĐI giữa hàng ghế - chia đôi mỗi hàng thành 2 khối trái/
+  // phải, giúp khách dễ nhận biết đường di chuyển vào/ra thay vì phải đếm ghế
+  // để đoán lối đi ở đâu. Cùng 1 công thức cho mọi hàng trong 1 phòng (số ghế
+  // mỗi hàng không đổi giữa các hàng) nên lối đi luôn thẳng hàng dọc suốt phòng.
+  int _aisleAfterIndex(int seatCount) => (seatCount / 2).ceil();
+
   @override
   Widget build(BuildContext context) {
+    final singleRows = layout.standardVipRowLabels;
+    final coupleRows = layout.sweetboxRows > 0 ? layout.sweetboxRowLabels : const <String>[];
+    final hasCoupleRows = coupleRows.isNotEmpty;
+
     return Column(
       children: [
-        for (final row in layout.standardVipRowLabels) _buildSingleRow(row),
-        if (layout.sweetboxRows > 0) ...[
+        for (int i = 0; i < singleRows.length; i++)
+          _buildSingleRow(
+            singleRows[i],
+            isFirstOverall: i == 0,
+            isLastOverall: !hasCoupleRows && i == singleRows.length - 1,
+          ),
+        if (hasCoupleRows) ...[
           SizedBox(height: dense ? 10 : 15),
           Text(
             layout.isLamour ? 'HÀNG GHẾ ĐÔI COUPLE - RIÊNG TƯ LÃNG MẠN' : 'HÀNG GHẾ ĐÔI SWEETBOX PREMIUM',
@@ -64,16 +97,55 @@ class SeatGridView extends StatelessWidget {
             ),
           ),
           SizedBox(height: dense ? 4 : 8),
-          for (final row in layout.sweetboxRowLabels) _buildCoupleRow(row),
+          for (int i = 0; i < coupleRows.length; i++)
+            _buildCoupleRow(
+              coupleRows[i],
+              isFirstOverall: singleRows.isEmpty && i == 0,
+              isLastOverall: i == coupleRows.length - 1,
+            ),
         ],
       ],
     );
   }
 
-  Widget _buildSingleRow(String row) {
+  // Khoảng trống LỐI ĐI - viền dọc mờ để trông như 1 khoảng hở có chủ đích
+  // (không phải lỗi dàn trang), kèm icon mũi tên 2 đầu hàng đầu/cuối gợi ý
+  // hướng di chuyển vào/ra dọc lối đi.
+  Widget _aisleGap({required double height, IconData? icon}) {
+    return SizedBox(
+      width: dense ? 12 : 16,
+      height: height,
+      child: icon != null
+          ? Icon(icon, color: Colors.amber.withValues(alpha: 0.7), size: dense ? 12 : 14)
+          : Center(
+              child: Container(width: 1.5, height: height * 0.65, color: Colors.white.withValues(alpha: 0.14)),
+            ),
+    );
+  }
+
+  Widget _buildSingleRow(String row, {required bool isFirstOverall, required bool isLastOverall}) {
     final isVip = layout.vipRowLabels.contains(row);
     final isGold = layout.isGoldClass && isVip;
+    final isMotion = layout.isMotionSeat;
     final goldColor = kSingleLargeSeatColor;
+    final seatSize = isGold ? 40.0 : 28.0;
+    final aisleAfter = _aisleAfterIndex(layout.seatsPerRow);
+
+    final rowChildren = <Widget>[];
+    for (int index = 0; index < layout.seatsPerRow; index++) {
+      if (index == aisleAfter) {
+        rowChildren.add(_aisleGap(
+          height: seatSize,
+          icon: isFirstOverall
+              ? Icons.keyboard_double_arrow_down_rounded
+              : (isLastOverall ? Icons.keyboard_double_arrow_up_rounded : null),
+        ));
+      }
+      final seatId = SeatGrid.singleSeatId(row, index);
+      rowChildren.add(_isMaintenance
+          ? _buildMaintenanceSeat(seatId, label: '${index + 1}', isDouble: false)
+          : _buildBookingSingleSeat(seatId, index: index, isVip: isVip, isGold: isGold, isMotion: isMotion, goldColor: goldColor));
+    }
 
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -83,18 +155,32 @@ class SeatGridView extends StatelessWidget {
           child: Text(row, textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold, fontSize: 12)),
         ),
-        ...List.generate(layout.seatsPerRow, (index) {
-          final seatId = SeatGrid.singleSeatId(row, index);
-          return _isMaintenance
-              ? _buildMaintenanceSeat(seatId, label: '${index + 1}', isDouble: false)
-              : _buildBookingSingleSeat(seatId, index: index, isVip: isVip, isGold: isGold, goldColor: goldColor);
-        }),
+        ...rowChildren,
       ],
     );
   }
 
-  Widget _buildCoupleRow(String row) {
+  Widget _buildCoupleRow(String row, {required bool isFirstOverall, required bool isLastOverall}) {
     final accentColor = layout.isLamour ? kCoupleSeatColor : Colors.pinkAccent;
+    final pairCount = layout.seatsPerRow ~/ 2;
+    final aisleAfter = _aisleAfterIndex(pairCount);
+
+    final rowChildren = <Widget>[];
+    for (int pairIndex = 0; pairIndex < pairCount; pairIndex++) {
+      if (pairIndex == aisleAfter) {
+        rowChildren.add(_aisleGap(
+          height: 30,
+          icon: isFirstOverall
+              ? Icons.keyboard_double_arrow_down_rounded
+              : (isLastOverall ? Icons.keyboard_double_arrow_up_rounded : null),
+        ));
+      }
+      final seatId = SeatGrid.coupleSeatId(row, pairIndex);
+      rowChildren.add(_isMaintenance
+          ? _buildMaintenanceSeat(seatId, label: '${pairIndex * 2 + 1}•${pairIndex * 2 + 2}', isDouble: true)
+          : _buildBookingCoupleSeat(seatId, pairIndex: pairIndex, accentColor: accentColor));
+    }
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -103,20 +189,16 @@ class SeatGridView extends StatelessWidget {
           child: Text(row, textAlign: TextAlign.center,
               style: TextStyle(color: accentColor, fontWeight: FontWeight.bold, fontSize: 12)),
         ),
-        ...List.generate(layout.seatsPerRow ~/ 2, (pairIndex) {
-          final seatId = SeatGrid.coupleSeatId(row, pairIndex);
-          return _isMaintenance
-              ? _buildMaintenanceSeat(seatId, label: '${pairIndex * 2 + 1}•${pairIndex * 2 + 2}', isDouble: true)
-              : _buildBookingCoupleSeat(seatId, pairIndex: pairIndex, accentColor: accentColor);
-        }),
+        ...rowChildren,
       ],
     );
   }
 
   Widget _buildBookingSingleSeat(String seatId,
-      {required int index, required bool isVip, required bool isGold, required Color goldColor}) {
+      {required int index, required bool isVip, required bool isGold, required bool isMotion, required Color goldColor}) {
     final isSelected = selectedSeats.contains(seatId);
     final isBooked = bookedSeats.contains(seatId);
+    final isWheelchair = wheelchairSeats.contains(seatId);
     final lockedBy = lockedBySeatId[seatId];
     final isLockedByOthers = lockedBy != null && lockedBy != currentUserKey;
 
@@ -142,6 +224,12 @@ class SeatGridView extends StatelessWidget {
       seatColor = const Color(0xFF322A1E);
       borderColor = Colors.orangeAccent.withValues(alpha: 0.2);
       labelColor = Colors.orangeAccent;
+    } else if (isMotion) {
+      // Ghế Motion (4DX) - kích thước như Standard, chỉ tô màu xanh lá đậm
+      // riêng biệt để khách biết trước đây là ghế rung/chuyển động theo phim.
+      seatColor = const Color(0xFF15291A);
+      borderColor = Colors.lightGreenAccent.withValues(alpha: 0.3);
+      labelColor = Colors.lightGreenAccent;
     }
 
     final seatSize = isGold ? 40.0 : 28.0;
@@ -160,9 +248,11 @@ class SeatGridView extends StatelessWidget {
         alignment: Alignment.center,
         child: isLockedByOthers
             ? const Icon(Icons.lock_rounded, color: Colors.grey, size: 12)
-            : (isGold
-                ? Icon(Icons.event_seat_rounded, color: labelColor, size: 20)
-                : Text('${index + 1}', style: TextStyle(color: labelColor, fontSize: 10, fontWeight: FontWeight.bold))),
+            : (isWheelchair
+                ? Icon(Icons.accessible_rounded, color: labelColor, size: 16)
+                : (isGold
+                    ? Icon(Icons.event_seat_rounded, color: labelColor, size: 20)
+                    : Text('${index + 1}', style: TextStyle(color: labelColor, fontSize: 10, fontWeight: FontWeight.bold)))),
       ),
     );
   }
@@ -204,21 +294,35 @@ class SeatGridView extends StatelessWidget {
 
   Widget _buildMaintenanceSeat(String seatId, {required String label, required bool isDouble}) {
     final isBroken = brokenSeats.contains(seatId);
+    final isWheelchair = wheelchairSeats.contains(seatId);
+    // Cả 2 loại đánh dấu cùng hiển thị (1 ghế có thể vừa hỏng vừa xe lăn) -
+    // ưu tiên hiện icon hỏng khi trùng vì "không dùng được" quan trọng hơn.
+    Color bg = const Color(0xFF222232);
+    Color? border;
+    Widget? icon;
+    if (isBroken) {
+      bg = Colors.redAccent.withValues(alpha: 0.4);
+      border = Colors.redAccent;
+      icon = const Icon(Icons.build_rounded, color: Colors.redAccent, size: 12);
+    } else if (isWheelchair) {
+      bg = Colors.blueAccent.withValues(alpha: 0.25);
+      border = Colors.blueAccent;
+      icon = const Icon(Icons.accessible_rounded, color: Colors.blueAccent, size: 14);
+    }
+    final onTap = maintenanceTarget == MaintenanceTarget.wheelchair ? onToggleWheelchair : onToggleBroken;
     return GestureDetector(
-      onTap: onToggleBroken == null ? null : () => onToggleBroken!(seatId),
+      onTap: onTap == null ? null : () => onTap(seatId),
       child: Container(
         margin: EdgeInsets.all(isDouble ? 2 : 2),
         width: isDouble ? 50 : 26,
         height: 26,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: isBroken ? Colors.redAccent.withValues(alpha: 0.4) : const Color(0xFF222232),
+          color: bg,
           borderRadius: BorderRadius.circular(5),
-          border: isBroken ? Border.all(color: Colors.redAccent) : null,
+          border: border != null ? Border.all(color: border) : null,
         ),
-        child: isBroken
-            ? const Icon(Icons.build_rounded, color: Colors.redAccent, size: 12)
-            : Text(label, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
+        child: icon ?? Text(label, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.bold)),
       ),
     );
   }

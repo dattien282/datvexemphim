@@ -29,19 +29,12 @@ class NotificationService {
     // Token có thể đổi (cài lại app, xoá dữ liệu...) - lắng nghe để cập nhật.
     _fcm.onTokenRefresh.listen((_) => _saveTokenForCurrentUser());
 
-    // 3. Lắng nghe thông báo khi ứng dụng ĐANG MỞ (Foreground)
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      log('Có thông báo tới khi đang mở app: ${message.notification?.title}');
-      log('Nội dung: ${message.notification?.body}');
-      // Lưu ý: Mặc định khi đang mở app, thông báo sẽ không hiện pop-up (banner) rớt từ trên xuống.
-      // Chúng ta sẽ cần thư viện flutter_local_notifications nếu muốn ép nó hiện thị,
-      // nhưng tạm thời cứ log ra để biết nó hoạt động đã.
-    });
-
-    // 4. Lắng nghe hành vi người dùng BẤM VÀO THÔNG BÁO (Từ background hoặc khi tắt app)
-    FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
-      log('Người dùng vừa bấm vào thông báo: ${message.notification?.title}');
-    });
+    // Lắng nghe foreground message + xử lý bấm vào thông báo (onMessage,
+    // onMessageOpenedApp, getInitialMessage) đã chuyển hết sang main.dart
+    // (_setupPushNotifications, NotificationRouter) - trước đây bị đăng ký
+    // TRÙNG Ở CẢ 2 NƠI (main.dart lẫn file này), khiến 1 lần bấm vào thông
+    // báo có nguy cơ điều hướng 2 lần. Class này giờ chỉ còn giữ đúng 1 việc:
+    // xin quyền + lưu FCM token.
   }
 
   Future<void> _saveTokenForCurrentUser() async {

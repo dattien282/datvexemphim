@@ -18,6 +18,7 @@ class StaffSeatMaintenanceScreen extends StatefulWidget {
 
 class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen> {
   QueryDocumentSnapshot? _selectedRoom;
+  MaintenanceTarget _target = MaintenanceTarget.broken;
 
   @override
   Widget build(BuildContext context) {
@@ -28,7 +29,7 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
         backgroundColor: const Color(0xFF16161F),
         elevation: 0,
         centerTitle: true,
-        title: const Text('GHẾ HỎNG / BẢO TRÌ', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 14)),
+        title: const Text('GHẾ HỎNG / XE LĂN', style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold, fontSize: 14)),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
           onPressed: () => Navigator.pop(context),
@@ -49,7 +50,7 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
                       }
                       final current = _selectedRoom != null && docs.any((d) => d.id == _selectedRoom!.id) ? _selectedRoom : null;
                       return DropdownButtonFormField<QueryDocumentSnapshot>(
-                        value: current,
+                        initialValue: current,
                         dropdownColor: const Color(0xFF1E1E2A),
                         isExpanded: true,
                         decoration: InputDecoration(
@@ -87,15 +88,43 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
           padding: const EdgeInsets.all(16),
           child: Column(
             children: [
+              // Chỉ 2 lựa chọn - hiện cả 2 nút thay vì giấu trong dropdown, để
+              // staff thấy ngay đang ở chế độ đánh dấu nào trước khi chạm ghế.
+              Row(
+                children: [
+                  Expanded(
+                    child: _TargetButton(
+                      label: 'GHẾ HỎNG',
+                      icon: Icons.build_rounded,
+                      color: Colors.redAccent,
+                      selected: _target == MaintenanceTarget.broken,
+                      onTap: () => setState(() => _target = MaintenanceTarget.broken),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: _TargetButton(
+                      label: 'GHẾ XE LĂN',
+                      icon: Icons.accessible_rounded,
+                      color: Colors.blueAccent,
+                      selected: _target == MaintenanceTarget.wheelchair,
+                      onTap: () => setState(() => _target = MaintenanceTarget.wheelchair),
+                    ),
+                  ),
+                ],
+              ),
               const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text('Chạm vào ghế để đánh dấu hỏng/gỡ đánh dấu', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text('Chạm vào ghế để đánh dấu/gỡ đánh dấu theo loại đang chọn ở trên', style: TextStyle(color: Colors.white38, fontSize: 11)),
               ),
               SeatGridView(
                 layout: layout,
                 mode: SeatGridMode.maintenance,
+                maintenanceTarget: _target,
                 brokenSeats: layout.brokenSeats,
+                wheelchairSeats: layout.wheelchairSeats,
                 onToggleBroken: (seatId) => _toggleBroken(seatId, layout.brokenSeats.contains(seatId)),
+                onToggleWheelchair: (seatId) => _toggleWheelchair(seatId, layout.wheelchairSeats.contains(seatId)),
               ),
             ],
           ),
@@ -105,8 +134,70 @@ class _StaffSeatMaintenanceScreenState extends State<StaffSeatMaintenanceScreen>
   }
 
   void _toggleBroken(String seatId, bool currentlyBroken) async {
-    await _selectedRoom!.reference.update({
+    final update = {
       'brokenSeats': currentlyBroken ? FieldValue.arrayRemove([seatId]) : FieldValue.arrayUnion([seatId]),
-    });
+    };
+    final batch = FirebaseFirestore.instance.batch();
+    batch.update(_selectedRoom!.reference, update);
+    // Ghi cả vào seat_map_versions hiện tại (nguồn thật cho suất chiếu mới -
+    // xem models/showtime.dart Showtime.seatMapVersionId), không chỉ document
+    // phòng (vốn chỉ là bản sao cache hiển thị nhanh).
+    final currentVersionId = (_selectedRoom!.data() as Map<String, dynamic>)['currentSeatMapVersionId'] as String?;
+    if (currentVersionId != null) {
+      batch.update(FirebaseFirestore.instance.collection('seat_map_versions').doc(currentVersionId), update);
+    }
+    await batch.commit();
+  }
+
+  void _toggleWheelchair(String seatId, bool currentlyWheelchair) async {
+    final update = {
+      'wheelchairSeats': currentlyWheelchair ? FieldValue.arrayRemove([seatId]) : FieldValue.arrayUnion([seatId]),
+    };
+    final batch = FirebaseFirestore.instance.batch();
+    batch.update(_selectedRoom!.reference, update);
+    final currentVersionId = (_selectedRoom!.data() as Map<String, dynamic>)['currentSeatMapVersionId'] as String?;
+    if (currentVersionId != null) {
+      batch.update(FirebaseFirestore.instance.collection('seat_map_versions').doc(currentVersionId), update);
+    }
+    await batch.commit();
+  }
+}
+
+class _TargetButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _TargetButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? color.withValues(alpha: 0.18) : const Color(0xFF16161F),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: selected ? color : Colors.white12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: selected ? color : Colors.white38, size: 18),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(color: selected ? color : Colors.white38, fontSize: 11, fontWeight: FontWeight.bold)),
+          ],
+        ),
+      ),
+    );
   }
 }

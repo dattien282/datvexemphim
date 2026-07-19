@@ -7,7 +7,6 @@ import '../../../core/constants.dart';
 import 'package:dat_ve_xem_phim_group5/features/theater_manager/screens/room_management_screen.dart' show roomFormatColor;
 import '../../../models/room_layout.dart';
 import '../../booking_and_payment/services/pricing_service.dart';
-import '../../booking_and_payment/services/seat_reservation_service.dart';
 import '../../theater_manager/widgets/seat_grid_widget.dart';
 
 /// Bán vé tại quầy cho khách vãng lai (không có tài khoản/app) - trước đây
@@ -44,6 +43,19 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
       _layout = const RoomLayout(theaterName: '', roomName: '', roomFormat: 'Standard');
     });
     final d = doc.data() as Map<String, dynamic>;
+
+    // Ưu tiên đúng phiên bản sơ đồ ghế đã chốt lúc tạo suất chiếu (xem
+    // models/showtime.dart Showtime.seatMapVersionId) - suất chiếu cũ chưa có
+    // field này fallback về tra theo tên phòng như cũ.
+    final seatMapVersionId = d['seatMapVersionId'] as String?;
+    if (seatMapVersionId != null) {
+      final versionDoc = await FirebaseFirestore.instance.collection('seat_map_versions').doc(seatMapVersionId).get();
+      if (versionDoc.exists && mounted) {
+        setState(() => _layout = RoomLayout.fromMap(versionDoc.id, versionDoc.data()!));
+      }
+      return;
+    }
+
     final roomName = d['roomName'] as String?;
     if (roomName == null || widget.theater == null) return;
     final roomSnap = await FirebaseFirestore.instance
@@ -59,53 +71,59 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
     });
   }
 
+  // Chỉ dùng để hiện SỐ TẠM TÍNH trong lúc chọn ghế (phản hồi tức thời, không
+  // gọi mạng mỗi lần tap ghế) - KHÔNG phải giá cuối cùng thu tiền. Công thức
+  // này chỉ cộng đơn giá ghế, thiếu phụ thu cuối tuần/khung giờ/dynamic
+  // pricing/pricing_rules mà server tính đủ - xem _fetchAuthoritativeAmount.
   int _seatPrice(String seatId, int priceStandard, int priceVip) =>
       seatBasePrice(seatId: seatId, layout: _layout, priceStandard: priceStandard, priceVip: priceVip);
 
-  // Kiểm tra trước (best-effort, không transaction) xem có ghế nào đang được
-  // khách giữ qua app (temporary_locks) không - trước đây staff bán tại quầy
-  // hoàn toàn bỏ qua bảng khoá này, chỉ check vé đã hoàn tất, nên có thể bán
-  // trùng đúng lúc khách đang thao tác chọn ghế đó trên app.
-  Future<Set<String>> _fetchActiveLockedSeats(Map<String, dynamic> showtimeData) async {
-    final now = DateTime.now();
-    final snap = await FirebaseFirestore.instance
-        .collection('temporary_locks')
-        .where('theater', isEqualTo: widget.theater)
-        .where('date', isEqualTo: showtimeData['date'])
-        .where('time', isEqualTo: showtimeData['time'])
-        .get();
-    final locked = <String>{};
-    for (final doc in snap.docs) {
-      final data = doc.data();
-      final expiresAt = (data['expiresAt'] as Timestamp?)?.toDate();
-      if (expiresAt != null && expiresAt.isAfter(now)) {
-        locked.add(data['seatId'] as String);
-      }
-    }
-    return locked;
+  Future<Map<String, dynamic>> _callWalkinSale({required bool preview}) async {
+    final idToken = await FirebaseAuth.instance.currentUser?.getIdToken();
+    final response = await http.post(
+      Uri.parse('${AppConfig.paymentBackendUrl}/walkin-sale'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (idToken != null) 'Authorization': 'Bearer $idToken',
+      },
+      body: jsonEncode({
+        'showtimeId': _selectedShowtime!.id,
+        'seatIds': _selectedSeats,
+        'customerName': _customerNameCtrl.text.trim(),
+        'preview': preview,
+      }),
+    ).timeout(const Duration(seconds: 20));
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
+  // Giá thu tiền + tạo vé giờ đều do BACKEND quyết định (computeAuthoritativeAmount
+  // - cùng công thức với luồng khách tự đặt online: phụ thu cuối tuần/khung
+  // giờ/dynamic pricing/pricing_rules), thay vì công thức riêng chỉ cộng đơn
+  // giá ghế ở client trước đây - 2 luồng bán vé cùng rạp từng có thể ra giá
+  // khác nhau cho cùng 1 ghế. Gọi preview trước để staff báo ĐÚNG số tiền cần
+  // thu cho khách trước khi thu tiền mặt, gọi lần 2 để thật sự tạo vé sau khi
+  // đã xác nhận thu tiền.
   Future<void> _confirmSale() async {
     if (_selectedShowtime == null || _selectedSeats.isEmpty) return;
-    final staff = FirebaseAuth.instance.currentUser;
-    final d = _selectedShowtime!.data() as Map<String, dynamic>;
-    final priceStandard = (d['priceStandard'] as num? ?? 90000).toInt();
-    final priceVip = (d['priceVip'] as num? ?? 120000).toInt();
-    final total = _selectedSeats.fold<int>(0, (sum, s) => sum + _seatPrice(s, priceStandard, priceVip));
 
-    final lockedSeats = await _fetchActiveLockedSeats(d);
-    final conflictingSeats = _selectedSeats.where(lockedSeats.contains).toList();
-    if (conflictingSeats.isNotEmpty) {
+    setState(() => _saving = true);
+    Map<String, dynamic> previewRes;
+    try {
+      previewRes = await _callWalkinSale(preview: true);
+    } catch (e) {
+      previewRes = {'success': false, 'message': 'Không kết nối được máy chủ: $e'};
+    }
+    if (mounted) setState(() => _saving = false);
+
+    if (previewRes['success'] != true) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Ghế ${conflictingSeats.join(", ")} đang được khách giữ qua app, vui lòng chọn ghế khác.'),
-            backgroundColor: Colors.orangeAccent,
-          ),
+          SnackBar(content: Text(previewRes['message'] ?? 'Không tính được giá vé'), backgroundColor: Colors.redAccent),
         );
       }
       return;
     }
+    final authoritativeAmount = (previewRes['finalAmount'] as num).toInt();
     if (!mounted) return;
 
     final confirm = await showDialog<bool>(
@@ -115,7 +133,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('XÁC NHẬN BÁN VÉ', style: TextStyle(color: Colors.tealAccent, fontWeight: FontWeight.bold, fontSize: 14)),
         content: Text(
-          'Ghế: ${_selectedSeats.join(', ')}\nTổng tiền mặt thu: ${_fmt(total)} đ\n\nXác nhận đã thu đủ tiền mặt từ khách?',
+          'Ghế: ${_selectedSeats.join(', ')}\nTổng tiền mặt thu: ${_fmt(authoritativeAmount)} đ\n\nXác nhận đã thu đủ tiền mặt từ khách?',
           style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.5),
         ),
         actions: [
@@ -132,69 +150,15 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
 
     setState(() => _saving = true);
     try {
-      final showtimeId = _selectedShowtime!.id;
-      final seatIds = List<String>.from(_selectedSeats);
-      final ticketRef = FirebaseFirestore.instance.collection('tickets').doc();
-
-      // Bọc trong transaction để xác thực lại ghế còn trống ngay tại thời
-      // điểm ghi vé - chặn trường hợp 2 giao dịch (VD: staff bán tại quầy +
-      // khách thanh toán qua app) cùng thắng 1 ghế nếu cả 2 gần như đồng thời.
-      final reserved = await FirebaseFirestore.instance.runTransaction((transaction) async {
-        final seatsAvailable = await areSeatsAvailable(transaction, showtimeId: showtimeId, seatIds: seatIds);
-        if (!seatsAvailable) return false;
-
-        reserveSeats(transaction, showtimeId: showtimeId, seatIds: seatIds);
-        transaction.set(ticketRef, {
-          'orderCode': DateTime.now().millisecondsSinceEpoch % 1000000,
-          'userId': staff?.uid,
-          'showtimeId': showtimeId,
-          'email': _customerNameCtrl.text.trim().isEmpty ? (staff?.email ?? 'quầy vé') : _customerNameCtrl.text.trim(),
-          'movieTitle': d['movieTitle'],
-          'posterUrl': '',
-          'seats': _selectedSeats,
-          'combos': const [],
-          'ticketAmount': total,
-          'discountAmount': 0,
-          'totalAmount': total,
-          'voucherCode': null,
-          'paymentMethod': 'cash_counter',
-          'paymentStatus': 'COMPLETED',
-          'theaterName': widget.theater,
-          'showDate': d['date'],
-          'showTime': d['time'],
-          'showtime': '${widget.theater} | ${d['date']} | ${d['time']}',
-          'roomName': d['roomName'],
-          'roomFormat': d['roomFormat'],
-          'language': d['language'] ?? 'Phụ đề',
-          'sessionType': d['sessionType'] ?? 'Standard',
-          'soldByStaffUid': staff?.uid,
-          'soldByStaffEmail': staff?.email,
-          'createdAt': Timestamp.now(),
-          'paidAt': Timestamp.now(),
-        });
-        return true;
-      });
-
-      if (!reserved) {
+      final saleRes = await _callWalkinSale(preview: false);
+      if (saleRes['success'] != true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Ghế vừa được đặt bởi giao dịch khác, vui lòng chọn lại ghế.'), backgroundColor: Colors.redAccent),
+            SnackBar(content: Text(saleRes['message'] ?? 'Không tạo được vé'), backgroundColor: Colors.redAccent),
           );
         }
         return;
       }
-
-      // Ký QR giống vé mua qua app để staff khác vẫn check-in bình thường.
-      try {
-        await http.post(
-          Uri.parse('${AppConfig.paymentBackendUrl}/sign-ticket'),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'ticketId': ticketRef.id}),
-        ).timeout(const Duration(seconds: 10));
-      } catch (_) {
-        // Không chặn luồng bán vé nếu ký QR lỗi - vé vẫn có thể check-in thủ công.
-      }
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Đã tạo vé bán tại quầy thành công!'), backgroundColor: Colors.teal),
@@ -247,7 +211,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                           ? _selectedShowtime!.id
                           : null;
                       return DropdownButtonFormField<String>(
-                        value: currentId,
+                        initialValue: currentId,
                         dropdownColor: const Color(0xFF1E1E2A),
                         isExpanded: true,
                         decoration: InputDecoration(
@@ -284,8 +248,8 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                       controller: _customerNameCtrl,
                       style: const TextStyle(color: Colors.white, fontSize: 13),
                       decoration: InputDecoration(
-                        hintText: 'Tên/SĐT khách (không bắt buộc)',
-                        hintStyle: const TextStyle(color: Colors.white24, fontSize: 12),
+                        labelText: 'Tên/SĐT khách (không bắt buộc)',
+                        labelStyle: const TextStyle(color: Colors.white38, fontSize: 12),
                         filled: true,
                         fillColor: const Color(0xFF16161F),
                         prefixIcon: const Icon(Icons.person_outline_rounded, color: Colors.tealAccent, size: 18),
@@ -325,7 +289,9 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
         for (final doc in snap.data?.docs ?? []) {
           final td = doc.data() as Map<String, dynamic>;
           if (td['paymentStatus'] != 'CANCELLED') {
-            for (final s in (td['seats'] as List? ?? [])) bookedSeats.add(s.toString());
+            for (final s in (td['seats'] as List? ?? [])) {
+              bookedSeats.add(s.toString());
+            }
           }
         }
         return InteractiveViewer(
@@ -343,6 +309,7 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                   layout: _layout,
                   selectedSeats: _selectedSeats.toSet(),
                   bookedSeats: bookedSeats,
+                  wheelchairSeats: _layout.wheelchairSeats,
                   onSeatTap: (seatId) => setState(() {
                     if (_selectedSeats.contains(seatId)) {
                       _selectedSeats.remove(seatId);
@@ -377,7 +344,9 @@ class _StaffWalkInSaleScreenState extends State<StaffWalkInSaleScreen> {
                 children: [
                   Text(_selectedSeats.isEmpty ? 'Chưa chọn ghế' : 'Ghế: ${_selectedSeats.join(', ')}',
                       style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-                  Text('${_fmt(total)} đ', style: const TextStyle(color: Colors.tealAccent, fontSize: 16, fontWeight: FontWeight.bold)),
+                  // Số tạm tính - giá thu tiền thật (có phụ thu cuối tuần/khung
+                  // giờ nếu có) hiện trong hộp thoại xác nhận, do backend tính.
+                  Text('~ ${_fmt(total)} đ', style: const TextStyle(color: Colors.tealAccent, fontSize: 16, fontWeight: FontWeight.bold)),
                 ],
               ),
             ),

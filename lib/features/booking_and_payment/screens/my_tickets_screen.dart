@@ -373,7 +373,7 @@ class _MyTicketsScreenState extends ConsumerState<MyTicketsScreen> with SingleTi
                                   width: 100,
                                   height: 140,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => _buildPlaceholderPoster(),
+                                  errorBuilder: (_, _, _) => _buildPlaceholderPoster(),
                                 ),
                               )
                             else

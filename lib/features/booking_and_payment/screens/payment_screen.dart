@@ -5,19 +5,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import 'my_tickets_screen.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../../notifications/screens/notification_service.dart';
 import '../../home/screens/home_screen.dart';
 import '../../../core/constants.dart';
-import 'age_verification_screen.dart';
-import '../services/discount_service.dart';
 import '../services/discount_service.dart';
 import '../services/age_verification_service.dart';
 import '../services/payment_service.dart';
-import '../services/seat_reservation_service.dart';
 
 class PaymentScreen extends StatefulWidget {
   final Map<String, dynamic> movieData;
@@ -62,15 +56,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
     if (ref == null || _paymentCompleted) return;
     _pendingTicketRef = null;
     try {
-      await ref.update({'paymentStatus': 'CANCELLED'});
-      // Nhả ghế đã đặt trước trong showtime_seat_status (Phase 4) - nếu không
-      // làm bước này, ghế của vé PENDING bỏ ngang sẽ bị kẹt vĩnh viễn trong
-      // lớp check atomic mới dù vé đã CANCELLED (khác với seat_booking_screen.dart
-      // vẫn thấy ghế trống đúng vì lọc theo paymentStatus != CANCELLED).
-      final showtimeId = widget.movieData['showtimeId'] as String?;
-      if (showtimeId != null) {
-        await releaseShowtimeSeats(showtimeId: showtimeId, seatIds: widget.selectedSeats);
-      }
+      // Huỷ qua backend (Admin SDK) thay vì tự update trực tiếp - firestore.rules
+      // không cho user tự sửa paymentStatus vé của mình (chỉ staff/manager/admin,
+      // xem firestore.rules collection 'tickets'). Backend xoá vé + nhả ghế
+      // (kể cả ghế đã chuyển BOOKED gắn với vé PENDING này, xem
+      // PaymentService.discardPendingTicket) trong 1 transaction atomic.
+      await PaymentService().discardPendingTicket(ref.id);
     } catch (e) {
       debugPrint('Không hủy được vé PENDING bỏ ngang: $e');
     }
@@ -807,7 +798,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         ),
                         Switch(
                           value: _useLoyaltyPoints,
-                          activeColor: Colors.orangeAccent,
+                          activeThumbColor: Colors.orangeAccent,
                           onChanged: (v) => setState(() => _useLoyaltyPoints = v),
                         ),
                       ],
@@ -830,9 +821,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           Expanded(
                             child: TextField(
                               controller: _voucherController,
+                              textCapitalization: TextCapitalization.characters,
                               style: const TextStyle(color: Colors.white, fontSize: 13),
                               decoration: InputDecoration(
-                                hintText: 'Nhập mã (STELLA50, STELLA100)...',
+                                labelText: 'Mã giảm giá',
+                                labelStyle: const TextStyle(color: Colors.white54, fontSize: 12),
+                                hintText: 'VD: STELLA50',
                                 hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
                                 filled: true,
                                 fillColor: const Color(0xFF121212),
@@ -844,14 +838,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          ElevatedButton(
+                          // Outlined thay vì fill amber đặc - nút "XÁC NHẬN
+                          // THANH TOÁN" mới là hành động chính của màn hình
+                          // này, "Áp dụng" chỉ là bước phụ nên không nên có
+                          // cùng mức nhấn mạnh thị giác (2 nút fill đặc cùng
+                          // màu cạnh tranh sự chú ý của người dùng).
+                          OutlinedButton(
                             onPressed: _applyVoucherCode,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.amber,
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.amber,
+                              side: const BorderSide(color: Colors.amber),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                             ),
-                            child: const Text('ÁP DỤNG', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 12)),
+                            child: const Text('ÁP DỤNG', style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)),
                           ),
                         ],
                       ),

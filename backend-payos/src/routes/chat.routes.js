@@ -52,7 +52,7 @@ router.post('/gemini-chat', requireAuth, async (req, res) => {
     }
 
     const model = geminiClient.getGenerativeModel({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3.5-flash',
       systemInstruction: GEMINI_SYSTEM_INSTRUCTION,
     });
 

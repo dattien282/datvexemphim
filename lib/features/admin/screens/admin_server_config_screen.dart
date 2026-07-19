@@ -23,6 +23,7 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
   bool _isMigratingShowtimes = false;
   bool _isMigratingFormats = false;
   bool _isSeedingRoomFormats = false;
+  bool _isSeedingStaffDemo = false;
 
   @override
   void initState() {
@@ -133,6 +134,24 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
       }
     } finally {
       if (mounted) setState(() => _isSeedingRoomFormats = false);
+    }
+  }
+
+  Future<void> _runSeedStaffDemo() async {
+    setState(() => _isSeedingStaffDemo = true);
+    try {
+      await seedStaffManagerDemoData();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Đã seed demo sự cố/ca làm/điểm danh cho các rạp đã có tài khoản staff!')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isSeedingStaffDemo = false);
     }
   }
 
@@ -281,6 +300,27 @@ class _AdminServerConfigScreenState extends State<AdminServerConfigScreen> {
                       child: _isSeedingRoomFormats
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                           : const Text('SEED DANH MỤC ĐỊNH DẠNG PHÒNG', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Tạo vài sự cố mẫu (Báo cáo Sự cố), ca làm hôm nay (Smart Roster) và 1 lượt điểm danh vào ca (Điểm danh ca làm) cho các rạp đã có tài khoản staff/manager - để demo staff/manager không trống trơn. Bỏ qua rạp nào chưa có tài khoản staff nào, và bỏ qua nếu rạp đó đã có dữ liệu hôm nay (chạy lại không tạo trùng).',
+                    style: TextStyle(color: Colors.white38, fontSize: 11),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: _isSeedingStaffDemo ? null : _runSeedStaffDemo,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orangeAccent,
+                        disabledBackgroundColor: Colors.white10,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: _isSeedingStaffDemo
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Text('SEED DEMO STAFF/MANAGER', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                     ),
                   ),
                 ],

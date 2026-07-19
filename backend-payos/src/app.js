@@ -10,9 +10,9 @@ app.get('/', (req, res) => {
   res.send('✅ Stella Cinema PayOS Backend is running!');
 });
 
-app.use(require('./routes/auth.routes'));
+app.use('/auth', require('./routes/auth.routes'));
 app.use(require('./routes/payment.routes'));
-app.use(require('./routes/seats.routes'));
+app.use('/showtimes', require('./routes/seats.routes'));
 app.use(require('./routes/showtime.routes'));
 app.use(require('./routes/ticket.routes'));
 app.use(require('./routes/cloudinary.routes'));

@@ -236,6 +236,82 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  void _showTermsAndConditions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0A0A0A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          maxChildSize: 0.9,
+          minChildSize: 0.4,
+          expand: false,
+          builder: (context, scrollController) {
+            return Container(
+              padding: const EdgeInsets.all(24.0),
+              child: ListView(
+                controller: scrollController,
+                children: [
+                  const Center(
+                    child: Text(
+                      'ĐIỀU KHOẢN SỬ DỤNG',
+                      style: TextStyle(
+                        color: Colors.amber,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  const Text(
+                    'Chào mừng bạn đến với Stella Cinema. Khi sử dụng ứng dụng của chúng tôi, bạn đồng ý tuân thủ các điều khoản sau:\n\n'
+                    '1. QUY ĐỊNH TÀI KHOẢN\n'
+                    'Mỗi người dùng chịu trách nhiệm bảo mật thông tin tài khoản, mật khẩu của mình và mọi hoạt động diễn ra dưới tài khoản đó. Việc chia sẻ tài khoản cho người khác hoặc sử dụng cho mục đích xấu có thể dẫn đến việc khóa tài khoản vĩnh viễn.\n\n'
+                    '2. QUY ĐỊNH ĐẶT VÉ VÀ ĐỔI ĐIỂM\n'
+                    'Vé xem phim và các voucher khuyến mãi từ điểm thưởng (Loyalty Points) chỉ có giá trị sử dụng một lần và áp dụng theo thời hạn quy định. Bất kỳ hành vi gian lận điểm thưởng hoặc trục lợi chính sách sẽ bị xử lý thu hồi.\n\n'
+                    '3. CHÍNH SÁCH BẢO MẬT & DỮ LIỆU\n'
+                    'Stella Cinema cam kết bảo vệ dữ liệu cá nhân của bạn. Dữ liệu khuôn mặt/CCCD cho việc xác minh tuổi sẽ được lưu trữ an toàn và xóa đi theo chính sách quyền riêng tư. Chúng tôi chỉ sử dụng thông tin liên lạc để gửi thông báo/OTP và cải thiện dịch vụ.\n\n'
+                    '4. QUY ĐỊNH TẠI RẠP\n'
+                    'Khách hàng cần xuất trình vé điện tử QR Code hợp lệ qua ứng dụng để check-in hoặc soát vé tại phòng chiếu. Rạp có quyền từ chối phục vụ nếu khách hàng vi phạm quy định về độ tuổi của phim hoặc mang thức ăn/nước uống từ ngoài vào.\n\n'
+                    '5. ĐIỀU KHOẢN THAY ĐỔI\n'
+                    'Stella Cinema có quyền cập nhật và chỉnh sửa các điều khoản này bất kỳ lúc nào mà không cần thông báo trước. Việc bạn tiếp tục sử dụng ứng dụng đồng nghĩa với việc chấp nhận các điều khoản mới.',
+                    style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.6),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 48,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'ĐÃ HIỂU',
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   // ── Logout ────────────────────────────────────────────────────────────────
   void _handleLogout() async {
     final navigator = Navigator.of(context);
@@ -781,7 +857,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       color: Colors.white38,
                       size: 14,
                     ),
-                    onTap: () {},
+                    onTap: _showTermsAndConditions,
                   ),
                 ],
               ),

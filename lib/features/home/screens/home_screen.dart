@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../widgets/banner_carousel.dart';
 import '../widgets/promo_popup.dart';
+import '../../notifications/screens/notification_service.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -30,6 +34,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   final ValueNotifier<String> _searchQuery = ValueNotifier('');
   final ValueNotifier<String> _selectedCategory = ValueNotifier('Tất cả');
   final List<String> _categories = ['Tất cả', 'Hành Động', 'Tâm Lý', 'Kịch Tính', 'Kinh Dị', 'Hoạt Hình'];
+  StreamSubscription<QuerySnapshot>? _vouchersSubscription;
 
   final List<BannerItem> bannerItems = const [
     BannerItem(
@@ -98,8 +103,40 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
-    // Đã tắt auto-seed phim mẫu: giờ `movies` chứa dữ liệu thật do admin quản lý
-    // qua AdminMoviesScreen, seed lại sẽ xoá mất dữ liệu thật đó.
+    
+    // Đăng ký lắng nghe Voucher mới được tạo trong thời gian thực
+    final startTime = Timestamp.now();
+    _vouchersSubscription = FirebaseFirestore.instance
+        .collection('vouchers')
+        .where('createdAt', isGreaterThan: startTime)
+        .snapshots()
+        .listen((snapshot) {
+      for (var change in snapshot.docChanges) {
+        if (change.type == DocumentChangeType.added) {
+          final voucherData = change.doc.data();
+          if (voucherData != null) {
+            final code = voucherData['code'] as String? ?? '';
+            final discountPercent = voucherData['discountPercent'] as int? ?? 0;
+            final discountAmount = voucherData['discountAmount'] as int? ?? 0;
+            final discountText = discountPercent > 0
+                ? '$discountPercent%'
+                : NumberFormat.currency(locale: 'vi_VN', symbol: 'đ', decimalDigits: 0).format(discountAmount);
+
+            // Đẩy thông báo ngoài app (sử dụng icon Stella Cinema)
+            LocalNotificationService.showNotificationPopup(
+              title: '🎟️ VOUCHER MỚI CỰC KHỦNG: $code',
+              body: 'Stella Cinema vừa tung mã giảm giá $discountText! Hãy dùng ngay kẻo hết lượt!',
+            );
+
+            // Hiển thị Popup quảng cáo Voucher trên trang Home
+            if (mounted) {
+              _showVoucherPromoDialog(voucherData);
+            }
+          }
+        }
+      }
+    });
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowPromoPopup());
   }
 
@@ -135,6 +172,206 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
     } catch (_) {
       // Không chặn màn hình chính nếu lỗi mạng/query - pop-up chỉ là gợi ý phụ.
     }
+  }
+
+  void _showVoucherPromoDialog(Map<String, dynamic> voucherData) {
+    final code = voucherData['code'] as String? ?? '';
+    final discountPercent = voucherData['discountPercent'] as int? ?? 0;
+    final discountAmount = voucherData['discountAmount'] as int? ?? 0;
+    final minOrder = voucherData['minOrder'] as int? ?? 0;
+    final discountText = discountPercent > 0
+        ? '$discountPercent%'
+        : NumberFormat.currency(locale: 'vi_VN', symbol: 'đ', decimalDigits: 0).format(discountAmount);
+
+    const promoImageUrl = 'https://images.unsplash.com/photo-1524678606370-a47ad25cb82a?q=80&w=600&auto=format&fit=crop';
+
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24),
+        child: Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF0F0F14),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: Colors.amber.withValues(alpha: 0.3), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.amber.withValues(alpha: 0.15),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ClipRRect(
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+                child: Stack(
+                  children: [
+                    Image.network(
+                      promoImageUrl,
+                      height: 150,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                    Container(
+                      height: 150,
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Colors.transparent, Color(0xFF0F0F14)],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 12,
+                      left: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.amber,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Row(
+                          children: [
+                            Icon(Icons.stars_rounded, color: Colors.black, size: 14),
+                            SizedBox(width: 4),
+                            Text(
+                              'QUÀ TẶNG MỚI',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Column(
+                  children: [
+                    const Text(
+                      '🎟️ VOUCHER MỚI ĐÃ XUẤT HIỆN!',
+                      style: TextStyle(
+                        color: Colors.amber,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Stella Cinema gửi tặng bạn mã giảm giá đặc biệt $discountText cho đơn hàng từ ${NumberFormat.currency(locale: 'vi_VN', symbol: 'đ', decimalDigits: 0).format(minOrder)}.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'MÃ KHUYẾN MÃI',
+                                  style: TextStyle(
+                                    color: Colors.white30,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  code,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 2,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: code));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Đã sao chép mã voucher!'),
+                                  backgroundColor: Colors.amber,
+                                  duration: Duration(seconds: 1),
+                                ),
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.amber,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            ),
+                            icon: const Icon(Icons.copy_rounded, color: Colors.black, size: 16),
+                            label: const Text(
+                              'SAO CHÉP',
+                              style: TextStyle(
+                                color: Colors.black,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 40,
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        style: TextButton.styleFrom(
+                          foregroundColor: Colors.white54,
+                        ),
+                        child: const Text(
+                          'BỎ QUA',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
 
@@ -263,6 +500,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with SingleTickerProvid
 
   @override
   void dispose() {
+    _vouchersSubscription?.cancel();
     _tabController.dispose();
     _searchQuery.dispose();
     _selectedCategory.dispose();

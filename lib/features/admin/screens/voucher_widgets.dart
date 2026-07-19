@@ -5,12 +5,7 @@ import 'package:intl/intl.dart';
 import '../../../providers/theaters_provider.dart';
 import 'admin_audit_log.dart';
 
-/// Shared voucher list + dialog, reused by AdminVouchersScreen (sees/creates
-/// vouchers for any theater, or global ones) and the theater_manager's
-/// voucher tab (scoped to their own assignedTheater only).
 class VoucherListView extends StatelessWidget {
-  /// null = admin mode, shows every voucher. Non-null = manager mode, shows
-  /// only vouchers whose theaterScope matches this theater.
   final String? theaterScopeFilter;
   const VoucherListView({super.key, this.theaterScopeFilter});
 
@@ -25,7 +20,7 @@ class VoucherListView extends StatelessWidget {
       stream: query.snapshots(),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator(color: Colors.orange));
+          return const Center(child: CircularProgressIndicator(color: Colors.amber));
         }
         final docs = snap.data?.docs ?? [];
         if (docs.isEmpty) {
@@ -42,7 +37,10 @@ class VoucherListView extends StatelessWidget {
                   icon: const Icon(Icons.add_rounded, color: Colors.black),
                   label: const Text('Tạo voucher đầu tiên',
                       style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
                 ),
               ],
             ),
@@ -87,11 +85,19 @@ class VoucherCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF16161F),
-        borderRadius: BorderRadius.circular(14),
+        color: const Color(0xFF161622),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: effectiveActive ? Colors.orange.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.05),
+          color: effectiveActive ? Colors.amber.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.05),
+          width: 1.2,
         ),
+        boxShadow: [
+          BoxShadow(
+            color: effectiveActive ? Colors.amber.withValues(alpha: 0.03) : Colors.transparent,
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Column(
         children: [
@@ -99,8 +105,8 @@ class VoucherCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              color: effectiveActive ? Colors.orange.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.03),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
+              color: effectiveActive ? Colors.amber.withValues(alpha: 0.08) : Colors.white.withValues(alpha: 0.02),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(19)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -108,13 +114,13 @@ class VoucherCard extends StatelessWidget {
                 Row(
                   children: [
                     Icon(Icons.local_offer_rounded,
-                        color: effectiveActive ? Colors.orange : Colors.white24, size: 18),
+                        color: effectiveActive ? Colors.amber : Colors.white24, size: 18),
                     const SizedBox(width: 8),
                     Text(code,
                         style: TextStyle(
-                            color: effectiveActive ? Colors.orange : Colors.white38,
+                            color: effectiveActive ? Colors.amber : Colors.white38,
                             fontWeight: FontWeight.w900,
-                            fontSize: 15,
+                            fontSize: 14,
                             fontFamily: 'monospace',
                             letterSpacing: 1.5)),
                   ],
@@ -124,8 +130,15 @@ class VoucherCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: effectiveActive ? Colors.green.withValues(alpha: 0.15) : Colors.red.withValues(alpha: 0.15),
+                        color: effectiveActive 
+                            ? Colors.green.withValues(alpha: 0.15) 
+                            : Colors.red.withValues(alpha: 0.15),
                         borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: effectiveActive 
+                              ? Colors.greenAccent.withValues(alpha: 0.3) 
+                              : Colors.redAccent.withValues(alpha: 0.3),
+                        ),
                       ),
                       child: Text(
                         effectiveActive ? 'Còn hiệu lực' : isExpired ? 'Hết hạn' : 'Đã tắt',
@@ -135,9 +148,14 @@ class VoucherCard extends StatelessWidget {
                             fontWeight: FontWeight.bold),
                       ),
                     ),
+                    const SizedBox(width: 4),
                     PopupMenuButton<String>(
                       icon: const Icon(Icons.more_vert_rounded, color: Colors.white38, size: 18),
-                      color: const Color(0xFF1E1E2A),
+                      color: const Color(0xFF161622),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                      ),
                       onSelected: (v) async {
                         if (v == 'edit') {
                           VoucherDialog.show(context, existing: doc, lockedTheaterScope: theaterScope);
@@ -164,13 +182,13 @@ class VoucherCard extends StatelessWidget {
                         }
                       },
                       itemBuilder: (_) => [
-                        const PopupMenuItem(value: 'edit', child: Text('Chỉnh sửa', style: TextStyle(color: Colors.white))),
+                        const PopupMenuItem(value: 'edit', child: Text('Chỉnh sửa', style: TextStyle(color: Colors.white, fontSize: 13))),
                         PopupMenuItem(
                           value: 'toggle',
                           child: Text(isActive ? 'Tắt voucher' : 'Bật lại',
-                              style: TextStyle(color: isActive ? Colors.redAccent : Colors.green)),
+                              style: TextStyle(color: isActive ? Colors.redAccent : Colors.green, fontSize: 13)),
                         ),
-                        const PopupMenuItem(value: 'delete', child: Text('Xóa', style: TextStyle(color: Colors.redAccent))),
+                        const PopupMenuItem(value: 'delete', child: Text('Xóa', style: TextStyle(color: Colors.redAccent, fontSize: 13))),
                       ],
                     ),
                   ],
@@ -180,21 +198,33 @@ class VoucherCard extends StatelessWidget {
           ),
           // Details
           Padding(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(child: _detail('Giảm giá', discountLabel, Colors.orange)),
-                    if (minOrder > 0) Expanded(child: _detail('Đơn tối thiểu', '${_fmt(minOrder)}đ', Colors.white54)),
-                    Expanded(child: _detail('Đã dùng', '$currentUses / ${maxUses == 0 ? '∞' : '$maxUses'}', Colors.blue)),
+                    _detail('Giảm giá', discountLabel, Colors.amber),
+                    if (minOrder > 0) _detail('Đơn tối thiểu', '${_fmt(minOrder)}đ', Colors.white70),
+                    _detail('Đã dùng', '$currentUses / ${maxUses == 0 ? '∞' : '$maxUses'}', Colors.blueAccent),
                     if (expires != null)
-                      Expanded(child: _detail('Hết hạn', DateFormat('dd/MM/yy').format(expires), Colors.white54)),
+                      _detail('Hết hạn', DateFormat('dd/MM/yy').format(expires), Colors.white54),
                   ],
                 ),
-                const SizedBox(height: 6),
-                _detail('Áp dụng', theaterScope ?? 'Tất cả rạp', Colors.tealAccent),
+                const SizedBox(height: 12),
+                Container(height: 1, color: Colors.white.withValues(alpha: 0.03)),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(Icons.storefront_rounded, color: Colors.tealAccent, size: 14),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Áp dụng: ${theaterScope ?? "Tất cả rạp"}',
+                      style: const TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -207,7 +237,8 @@ class VoucherCard extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: Colors.white38, fontSize: 10)),
+        Text(label, style: const TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 4),
         Text(value, style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.bold)),
       ],
     );
@@ -217,11 +248,7 @@ class VoucherCard extends StatelessWidget {
       v.toString().replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.');
 }
 
-// ── Voucher dialog ─────────────────────────────────────────────────────────────
 class VoucherDialog {
-  /// [lockedTheaterScope]: if non-null and the caller is a theater_manager,
-  /// the theater picker is hidden and every voucher created/edited is forced
-  /// to that scope. Pass null for admin (free choice incl. "Tất cả rạp").
   static Future<void> show(BuildContext context, {QueryDocumentSnapshot? existing, String? lockedTheaterScope}) {
     return showDialog(
       context: context,
@@ -247,7 +274,7 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
   final _maxCtrl = TextEditingController(text: '0');
   bool _isPercent = true;
   DateTime _expires = DateTime.now().add(const Duration(days: 30));
-  String? _theaterScope; // null = "Tất cả rạp"
+  String? _theaterScope;
 
   @override
   void initState() {
@@ -283,11 +310,14 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
   Widget build(BuildContext context) {
     final theaterNames = ref.watch(theaterNamesProvider);
     return AlertDialog(
-      backgroundColor: const Color(0xFF16161F),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      backgroundColor: const Color(0xFF0F0F14),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+      ),
       title: Text(
         widget.existing != null ? 'CHỈNH SỬA VOUCHER' : 'TẠO VOUCHER MỚI',
-        style: const TextStyle(color: Colors.orange, fontWeight: FontWeight.bold, fontSize: 14),
+        style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 14),
       ),
       content: SingleChildScrollView(
         child: Column(
@@ -295,18 +325,25 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _field(_codeCtrl, 'Mã voucher (VD: SUMMER20)', Icons.local_offer_rounded),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             if (widget.lockedTheaterScope == null) ...[
-              const Text('Áp dụng cho:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              const Text('Áp dụng cho rạp:', style: TextStyle(color: Colors.white54, fontSize: 12)),
               const SizedBox(height: 6),
               DropdownButtonFormField<String?>(
                 isExpanded: true,
                 initialValue: _theaterScope,
-                dropdownColor: const Color(0xFF1E1E2A),
+                dropdownColor: const Color(0xFF161622),
                 decoration: InputDecoration(
                   filled: true,
-                  fillColor: const Color(0xFF1E1E2A),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                  fillColor: const Color(0xFF161622),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+                  ),
                   contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 ),
                 style: const TextStyle(color: Colors.white, fontSize: 12),
@@ -316,59 +353,69 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
                 ],
                 onChanged: (v) => setState(() => _theaterScope = v),
               ),
-              const SizedBox(height: 10),
-            ] else
+              const SizedBox(height: 12),
+            ] else ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                margin: const EdgeInsets.only(bottom: 10),
-                decoration: BoxDecoration(color: const Color(0xFF1E1E2A), borderRadius: BorderRadius.circular(8)),
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF161622), 
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.15)),
+                ),
                 child: Row(
                   children: [
                     const Icon(Icons.storefront_rounded, color: Colors.tealAccent, size: 16),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text('Chỉ áp dụng tại: ${widget.lockedTheaterScope}',
-                          style: const TextStyle(color: Colors.tealAccent, fontSize: 12)),
+                          style: const TextStyle(color: Colors.tealAccent, fontSize: 12, fontWeight: FontWeight.w500)),
                     ),
                   ],
                 ),
               ),
+            ],
+            
             // Discount type toggle
+            const Text('Loại giảm giá:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 8),
             Row(
               children: [
-                const Text('Loại giảm:', style: TextStyle(color: Colors.white54, fontSize: 12)),
-                const SizedBox(width: 12),
-                _toggle('% Phần trăm', true),
+                Expanded(child: _toggle('% Phần trăm', true)),
                 const SizedBox(width: 8),
-                _toggle('Số tiền cố định', false),
+                Expanded(child: _toggle('Cố định (đ)', false)),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             if (_isPercent)
               _field(_pctCtrl, 'Giảm % (VD: 20)', Icons.percent_rounded, type: TextInputType.number)
             else
               _field(_amtCtrl, 'Giảm (đ) (VD: 50000)', Icons.money_rounded, type: TextInputType.number),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _field(_minCtrl, 'Đơn tối thiểu (đ) – 0 = không giới hạn', Icons.shopping_cart_rounded, type: TextInputType.number),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
             _field(_maxCtrl, 'Số lần dùng tối đa – 0 = không giới hạn', Icons.repeat_rounded, type: TextInputType.number),
-            const SizedBox(height: 10),
+            const SizedBox(height: 12),
+            
             // Date picker
+            const Text('Hạn sử dụng:', style: TextStyle(color: Colors.white54, fontSize: 12)),
+            const SizedBox(height: 6),
             GestureDetector(
               onTap: _pickDate,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E2A),
-                  borderRadius: BorderRadius.circular(8),
+                  color: const Color(0xFF161622),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.calendar_month_rounded, color: Colors.orange, size: 18),
+                    const Icon(Icons.calendar_month_rounded, color: Colors.amber, size: 18),
                     const SizedBox(width: 10),
                     Text(
-                      'Hết hạn: ${DateFormat('dd/MM/yyyy').format(_expires)}',
-                      style: const TextStyle(color: Colors.white70, fontSize: 13),
+                      DateFormat('dd/MM/yyyy').format(_expires),
+                      style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
                     ),
                     const Spacer(),
                     const Icon(Icons.edit_calendar_rounded, color: Colors.white38, size: 16),
@@ -380,11 +427,17 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
         ),
       ),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('HỦY', style: TextStyle(color: Colors.grey))),
+        TextButton(
+          onPressed: () => Navigator.pop(context), 
+          child: const Text('HỦY', style: TextStyle(color: Colors.white38))
+        ),
         ElevatedButton(
           onPressed: _save,
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
-          child: Text(widget.existing != null ? 'CẬP NHẬT' : 'TẠO',
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.amber,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          child: Text(widget.existing != null ? 'CẬP NHẬT' : 'TẠO VOUCHER',
               style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
         ),
       ],
@@ -396,13 +449,24 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
     return GestureDetector(
       onTap: () => setState(() => _isPercent = value),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: active ? Colors.orange.withValues(alpha: 0.2) : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: active ? Colors.orange : Colors.white24),
+          color: active ? Colors.amber.withValues(alpha: 0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: active ? Colors.amber : Colors.white10,
+            width: 1.2,
+          ),
         ),
-        child: Text(label, style: TextStyle(color: active ? Colors.orange : Colors.white38, fontSize: 11)),
+        child: Text(
+          label, 
+          style: TextStyle(
+            color: active ? Colors.amber : Colors.white38, 
+            fontSize: 11,
+            fontWeight: FontWeight.bold
+          )
+        ),
       ),
     );
   }
@@ -415,10 +479,21 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.white38, fontSize: 11),
-        prefixIcon: Icon(icon, color: Colors.orange, size: 18),
+        prefixIcon: Icon(icon, color: Colors.amber, size: 18),
         filled: true,
-        fillColor: const Color(0xFF1E1E2A),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+        fillColor: const Color(0xFF161622),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14), 
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14), 
+          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.05)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14), 
+          borderSide: const BorderSide(color: Colors.amber, width: 1.2),
+        ),
         contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       ),
     );
@@ -431,7 +506,13 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder: (ctx, child) => Theme(
-        data: ThemeData.dark().copyWith(colorScheme: const ColorScheme.dark(primary: Colors.orange)),
+        data: ThemeData.dark().copyWith(
+          colorScheme: const ColorScheme.dark(
+            primary: Colors.amber,
+            onPrimary: Colors.black,
+            surface: Color(0xFF0F0F14),
+          ),
+        ),
         child: child!,
       ),
     );
@@ -442,9 +523,6 @@ class _VoucherDialogWidgetState extends ConsumerState<_VoucherDialogWidget> {
     final code = _codeCtrl.text.trim().toUpperCase();
     if (code.isEmpty) return;
 
-    // Kẹp giá trị ngay ở client (0-100% và không âm) - firestore.rules cũng
-    // chặn lại ở tầng server để không phụ thuộc hoàn toàn vào UI, nhưng kẹp
-    // sẵn ở đây tránh việc admin gõ nhầm 500% rồi bị rule từ chối khó hiểu.
     final pct = (int.tryParse(_pctCtrl.text) ?? 0).clamp(0, 100);
     final amt = (int.tryParse(_amtCtrl.text) ?? 0).clamp(0, 1 << 30);
     final minOrder = (int.tryParse(_minCtrl.text) ?? 0).clamp(0, 1 << 30);

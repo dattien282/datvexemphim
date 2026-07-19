@@ -286,7 +286,21 @@ PROMO_PUSH_INTERVAL_HOURS=6
 DYNAMIC_PRICING_ENABLED=true
 ```
 
+**Mức độ cần thiết của từng biến** (nếu chỉ muốn chạy thử nhanh, không cần điền hết ngay):
+
+| Biến | Có cần điền ngay không | Vì sao |
+|---|---|---|
+| `PORT` | Không cần đổi | Mặc định 3000 là ổn |
+| `PAYOS_CLIENT_ID/API_KEY/CHECKSUM_KEY` | Chỉ cần nếu test thanh toán "Chuyển khoản ngân hàng (VietQR)" | Không điền thì nút này lỗi khi bấm, nhưng thanh toán bằng **Stella Wallet** vẫn chạy bình thường không cần cái này |
+| `TICKET_SIGNING_SECRET` | Nên đổi dù chỉ test local | Giá trị mặc định trong code không an toàn cho check-in QR thật |
+| `SMTP_USER/SMTP_PASS` | Cần nếu muốn test đăng nhập (OTP bắt buộc với khách hàng) | Thiếu thì `/auth/send-otp` trả lỗi 503, khách hàng email/password không vào được app (staff/manager/admin/accountant/marketing không cần OTP nên không bị ảnh hưởng) |
+| `CLOUDINARY_*` | Chỉ cần nếu test luồng xác minh tuổi 18+/đổi avatar | Dùng upload ảnh CCCD/avatar; phim thường không đụng tới |
+| `GEMINI_API_KEY` / `TMDB_API_KEY` | Không bắt buộc | Để trống được — chatbot chạy chế độ offline, TMDB dùng dữ liệu mẫu; điền sau qua UI cũng được (Gemini) |
+
+Tóm lại: nếu chỉ test luồng đặt vé + thanh toán ví, chỉ cần đổi `TICKET_SIGNING_SECRET` và điền `SMTP_USER`/`SMTP_PASS` (để qua được OTP) là đủ chạy được, các mục còn lại điền sau khi cần test đúng tính năng đó.
+
 Đặt file `serviceAccountKey.json` (đã tải ở bước 1) vào đúng `backend-payos/serviceAccountKey.json` — cùng cấp với `package.json`, **không** để trong `src/`.
+
 
 Chạy server:
 ```bash
